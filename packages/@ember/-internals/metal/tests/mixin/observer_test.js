@@ -1,9 +1,20 @@
 import { set, get, observer, mixin, Mixin } from '../..';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
+import { destroy } from '@glimmer/runtime';
+
+let obj;
 
 moduleFor(
   'Mixin observer',
   class extends AbstractTestCase {
+    afterEach() {
+      if (obj !== undefined) {
+        destroy(obj);
+        obj = undefined;
+        return runLoopSettled();
+      }
+    }
+
     async ['@test global observer helper'](assert) {
       let MyMixin = Mixin.create({
         count: 0,
@@ -13,7 +24,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({}, MyMixin);
+      obj = mixin({}, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj, 'bar', 'BAZ');
@@ -31,7 +42,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({}, MyMixin);
+      obj = mixin({}, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj, 'bar', 'BAZ');
@@ -41,6 +52,9 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 2, 'should invoke observer after change');
+
+      destroy(obj);
+      await runLoopSettled();
     }
 
     async ['@test replacing observer should remove old observer'](assert) {
@@ -58,7 +72,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({}, MyMixin, Mixin2);
+      obj = mixin({}, MyMixin, Mixin2);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj, 'bar', 'BAZ');
@@ -83,7 +97,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({}, MyMixin);
+      obj = mixin({}, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj2, 'baz', 'BAZ');
@@ -103,7 +117,7 @@ moduleFor(
         bar: obj2,
       });
 
-      let obj = mixin({}, MyMixin);
+      obj = mixin({}, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj2, 'baz', 'BAZ');
@@ -124,7 +138,7 @@ moduleFor(
 
       let MyMixin2 = Mixin.create({ bar: obj2 });
 
-      let obj = mixin({}, MyMixin);
+      obj = mixin({}, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       MyMixin2.apply(obj);
@@ -146,7 +160,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({ bar: obj2 }, MyMixin);
+      obj = mixin({ bar: obj2 }, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj2, 'baz', 'BAZ');
@@ -166,7 +180,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({}, MyMixin2, MyMixin);
+      obj = mixin({}, MyMixin2, MyMixin);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj2, 'baz', 'BAZ');
@@ -186,7 +200,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({}, MyMixin, MyMixin2);
+      obj = mixin({}, MyMixin, MyMixin2);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj2, 'baz', 'BAZ');
@@ -208,7 +222,7 @@ moduleFor(
         }),
       });
 
-      let obj = mixin({ bar: obj2 }, MyMixin, MyMixin2);
+      obj = mixin({ bar: obj2 }, MyMixin, MyMixin2);
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer immediately');
 
       set(obj2, 'baz', 'BAZ');

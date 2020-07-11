@@ -168,15 +168,15 @@ moduleFor(
         e: observer('colors.content.[]', () => eCalled++),
       }).create();
 
+      // bootstrap aliases
+      obj.length;
+
       obj.set(
         'model',
         ArrayProxy.create({
           content: a(['red', 'yellow', 'blue']),
         })
       );
-
-      // bootstrap aliases
-      obj.length;
 
       await runLoopSettled();
 
@@ -202,6 +202,8 @@ moduleFor(
       assert.equal(cCalled, 2, 'expected observer `colors.content.length` to be called TWICE');
       assert.equal(dCalled, 2, 'expected observer `colors.[]` to be called TWICE');
       assert.equal(eCalled, 2, 'expected observer `colors.content.[]` to be called TWICE');
+
+      obj.destroy();
     }
   }
 );

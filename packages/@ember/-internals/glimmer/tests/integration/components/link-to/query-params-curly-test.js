@@ -41,6 +41,21 @@ moduleFor(
       });
     }
 
+    ['@test populates href with fully supplied query param values, but without @route param']() {
+      this.addTemplate(
+        'index',
+        `{{#link-to (query-params foo='2' bar='NAW')}}QueryParams{{/link-to}}`
+      );
+
+      return this.visit('/').then(() => {
+        this.assertComponentElement(this.firstChild, {
+          tagName: 'a',
+          attrs: { href: '/?bar=NAW&foo=2' },
+          content: 'QueryParams',
+        });
+      });
+    }
+
     ['@test populates href with partially supplied query param values, but omits if value is default value']() {
       this.addTemplate('index', `{{#link-to 'index' (query-params foo='123')}}Index{{/link-to}}`);
 
@@ -53,22 +68,24 @@ moduleFor(
       });
     }
 
-    async ['@feature(ember-glimmer-angle-bracket-built-ins) `(query-params)` must be used in conjunction with `{{link-to}}'](
-      assert
-    ) {
+    ['@test `(query-params)` can be used outside of `{{link-to}}'](assert) {
+      if (!DEBUG) {
+        assert.expect(0);
+        return;
+      }
+
       this.addTemplate(
         'index',
-        `{{#let (query-params foo='456' bar='NAW') as |qp|}}{{link-to 'Index' 'index' qp}}{{/let}}`
+        `{{#let (query-params foo='456' alon='BUKAI') as |qp|}}{{link-to 'Index' 'index' qp}}{{/let}}`
       );
 
-      // TODO If we visit this page at all in production mode, it'll fail for
-      // entirely different reasons than what this test is trying to test.
-      let promise = DEBUG ? this.visit('/') : null;
-
-      await assert.rejectsAssertion(
-        promise,
-        /The `\(query-params\)` helper can only be used when invoking the `{{link-to}}` component\./
-      );
+      return this.visit('/').then(() => {
+        this.assertComponentElement(this.firstChild, {
+          tagName: 'a',
+          attrs: { href: '/?alon=BUKAI&foo=456', class: classMatcher('ember-view') },
+          content: 'Index',
+        });
+      });
     }
   }
 );
@@ -746,6 +763,50 @@ moduleFor(
         assert.equal(router.get('location.path'), '/foos');
         this.shouldBeActive(assert, '#foos-link');
       });
+    }
+
+    ['@test the {{link-to}} does not throw an error if called without a @route argument, but with a @query argument'](
+      assert
+    ) {
+      this.addTemplate(
+        'index',
+        `
+        {{#link-to (query-params page=pageNumber) id='page-link'}}
+          Index
+        {{/link-to}}
+        `
+      );
+
+      this.add(
+        'route:index',
+        Route.extend({
+          model() {
+            return [
+              { id: 'yehuda', name: 'Yehuda Katz' },
+              { id: 'tom', name: 'Tom Dale' },
+              { id: 'erik', name: 'Erik Brynroflsson' },
+            ];
+          },
+        })
+      );
+
+      this.add(
+        'controller:index',
+        Controller.extend({
+          queryParams: ['page'],
+          page: 1,
+          pageNumber: 5,
+        })
+      );
+
+      return this.visit('/')
+        .then(() => {
+          this.shouldNotBeActive(assert, '#page-link');
+          return this.visit('/?page=5');
+        })
+        .then(() => {
+          this.shouldBeActive(assert, '#page-link');
+        });
     }
 
     ['@test [GH#17869] it does not cause shadowing assertion with `hash` local variable']() {

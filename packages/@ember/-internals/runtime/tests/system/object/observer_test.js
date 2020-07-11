@@ -1,5 +1,5 @@
 import { run } from '@ember/runloop';
-import { observer, get, set } from '@ember/-internals/metal';
+import { alias, observer, get, set } from '@ember/-internals/metal';
 import EmberObject from '../../../lib/system/object';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
 
@@ -22,6 +22,35 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 1, 'should invoke observer after change');
+
+      obj.destroy();
+    }
+
+    async ['@test setting `undefined` value on observed property behaves correctly'](assert) {
+      let MyClass = EmberObject.extend({
+        mood: 'good',
+        foo: observer('mood', function() {}),
+      });
+
+      let obj = MyClass.create();
+      assert.equal(get(obj, 'mood'), 'good');
+
+      set(obj, 'mood', 'bad');
+      await runLoopSettled();
+
+      assert.equal(get(obj, 'mood'), 'bad');
+
+      set(obj, 'mood', undefined);
+      await runLoopSettled();
+
+      assert.equal(get(obj, 'mood'), undefined);
+
+      set(obj, 'mood', 'awesome');
+      await runLoopSettled();
+
+      assert.equal(get(obj, 'mood'), 'awesome');
+
+      obj.destroy();
     }
 
     async ['@test observer on subclass'](assert) {
@@ -51,6 +80,8 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 1, 'should invoke observer after change');
+
+      obj.destroy();
     }
 
     async ['@test observer on instance'](assert) {
@@ -68,6 +99,9 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 1, 'should invoke observer after change');
+
+      obj.destroy();
+      await runLoopSettled();
     }
 
     async ['@test observer on instance overriding class'](assert) {
@@ -97,9 +131,11 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 1, 'should invoke observer after change');
+
+      obj.destroy();
     }
 
-    ['@test observer should not fire after being destroyed'](assert) {
+    async ['@test observer should not fire after being destroyed'](assert) {
       let obj = EmberObject.extend({
         count: 0,
         foo: observer('bar', function() {
@@ -116,6 +152,8 @@ moduleFor(
       }, `calling set on destroyed object: ${obj}.bar = BAZ`);
 
       assert.equal(get(obj, 'count'), 0, 'should not invoke observer after change');
+
+      obj.destroy();
     }
 
     // ..........................................................
@@ -153,6 +191,9 @@ moduleFor(
 
       assert.equal(get(obj1, 'count'), 1, 'should not invoke again');
       assert.equal(get(obj2, 'count'), 1, 'should invoke observer on obj2');
+
+      obj1.destroy();
+      obj2.destroy();
     }
 
     async ['@test chain observer on class'](assert) {
@@ -197,6 +238,9 @@ moduleFor(
 
       assert.equal(get(obj1, 'count'), 1, 'should not invoke again');
       assert.equal(get(obj2, 'count'), 1, 'should invoke observer on obj2');
+
+      obj1.destroy();
+      obj2.destroy();
     }
 
     async ['@test chain observer on class that has a reference to an uninitialized object will finish chains that reference it'](
@@ -235,6 +279,42 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(changed, true, 'child should have been notified of change to path');
+
+      parent.child.destroy();
+      parent.destroy();
+    }
+
+    async ['@test cannot re-enter observer while it is flushing'](assert) {
+      let changed = false;
+
+      let Class = EmberObject.extend({
+        bar: 0,
+
+        get foo() {
+          // side effects during creation, setting a value and running through
+          // sync observers for a second time.
+          return this.incrementProperty('bar');
+        },
+
+        // Ensures we get `foo` eagerly when attempting to observe it
+        fooAlias: alias('foo'),
+
+        parentOneTwoDidChange: observer({
+          dependentKeys: ['fooAlias'],
+          fn() {
+            changed = true;
+          },
+          sync: true,
+        }),
+      });
+
+      let obj = Class.create();
+
+      obj.notifyPropertyChange('foo');
+
+      assert.equal(changed, true, 'observer fired successfully');
+
+      obj.destroy();
     }
   }
 );

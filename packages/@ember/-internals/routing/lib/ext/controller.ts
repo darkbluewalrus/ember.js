@@ -19,6 +19,7 @@ ControllerMixin.reopen({
     Available queryParam types: `boolean`, `number`, `array`.
     If query param type not specified, it will be `string`.
     To explicitly configure a query parameter property so it coerces as expected, you must define a type property:
+
     ```javascript
       queryParams: [{
         category: {
@@ -26,6 +27,7 @@ ControllerMixin.reopen({
         }
       }]
     ```
+
     @for Ember.ControllerMixin
     @property queryParams
     @public
@@ -136,7 +138,7 @@ ControllerMixin.reopen({
     aController.transitionToRoute({ queryParams: { sort: 'date' } });
     ```
 
-    See also [replaceRoute](/api/ember/release/classes/Ember.ControllerMixin/methods/replaceRoute?anchor=replaceRoute).
+    See also [replaceRoute](/ember/release/classes/Ember.ControllerMixin/methods/replaceRoute?anchor=replaceRoute).
 
     @param {String} name the name of the route or a URL
     @param {...Object} models the model(s) or identifier(s) to be used

@@ -149,7 +149,9 @@ export default class Container {
    @return {any}
    */
   lookup(fullName: string, options: LookupOptions): any {
-    assert('expected container not to be destroyed', !this.isDestroyed);
+    if (this.isDestroyed) {
+      throw new Error(`Can not call \`.lookup\` after the owner has been destroyed`);
+    }
     assert('fullName must be a proper full name', this.registry.isValidFullName(fullName));
     return lookup(this, this.registry.normalize(fullName), options);
   }
@@ -161,8 +163,9 @@ export default class Container {
    @method destroy
    */
   destroy(): void {
-    destroyDestroyables(this);
     this.isDestroying = true;
+
+    destroyDestroyables(this);
   }
 
   finalizeDestroy(): void {
@@ -211,7 +214,9 @@ export default class Container {
    @return {any}
    */
   factoryFor<T, C>(fullName: string, options: LookupOptions = {}): Factory<T, C> | undefined {
-    assert('expected container not to be destroyed', !this.isDestroyed);
+    if (this.isDestroyed) {
+      throw new Error(`Can not call \`.factoryFor\` after the owner has been destroyed`);
+    }
     let normalizedName = this.registry.normalize(fullName);
 
     assert('fullName must be a proper full name', this.registry.isValidFullName(normalizedName));
@@ -397,7 +402,17 @@ function instantiateFactory(
   // SomeClass { singleton: true, instantiate: true } | { singleton: true } | { instantiate: true } | {}
   // By default majority of objects fall into this case
   if (isSingletonInstance(container, fullName, options)) {
-    return (container.cache[normalizedName] = factoryManager.create());
+    let instance = (container.cache[normalizedName] = factoryManager.create());
+
+    // if this lookup happened _during_ destruction (emits a deprecation, but
+    // is still possible) ensure that it gets destroyed
+    if (container.isDestroying) {
+      if (typeof instance.destroy === 'function') {
+        instance.destroy();
+      }
+    }
+
+    return instance;
   }
 
   // SomeClass { singleton: false, instantiate: true }
@@ -561,6 +576,14 @@ class FactoryManager<T, C> {
   }
 
   create(options?: { [prop: string]: any }) {
+    let { container } = this;
+
+    if (container.isDestroyed) {
+      throw new Error(
+        `Can not create new instances after the owner has been destroyed (you attempted to create ${this.fullName})`
+      );
+    }
+
     let injectionsCache = this.injections;
     if (injectionsCache === undefined) {
       let { injections, isDynamic } = injectionsFor(this.container, this.normalizedName);
@@ -595,9 +618,7 @@ class FactoryManager<T, C> {
 
     if (!this.class.create) {
       throw new Error(
-        `Failed to create an instance of '${
-          this.normalizedName
-        }'. Most likely an improperly defined class or an invalid module export.`
+        `Failed to create an instance of '${this.normalizedName}'. Most likely an improperly defined class or an invalid module export.`
       );
     }
 

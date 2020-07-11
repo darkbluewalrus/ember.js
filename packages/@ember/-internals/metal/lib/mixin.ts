@@ -1,6 +1,7 @@
 /**
 @module @ember/object
 */
+import { ENV } from '@ember/-internals/environment';
 import { Meta, meta as metaFor, peekMeta } from '@ember/-internals/meta';
 import {
   getListeners,
@@ -8,12 +9,10 @@ import {
   getOwnPropertyDescriptors,
   guidFor,
   makeArray,
-  NAME_KEY,
   ROOT,
   setObservers,
   wrap,
 } from '@ember/-internals/utils';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
 import { assert, deprecate } from '@ember/debug';
 import { ALIAS_METHOD } from '@ember/deprecated-features';
 import { assign } from '@ember/polyfills';
@@ -33,7 +32,7 @@ import {
 import { addListener, removeListener } from './events';
 import expandProperties from './expand_properties';
 import { classToString, setUnprocessedMixins } from './namespace_search';
-import { addObserver, removeObserver, revalidateObservers } from './observer';
+import { addObserver, removeObserver } from './observer';
 import { defineProperty } from './properties';
 
 const a_concat = Array.prototype.concat;
@@ -247,7 +246,7 @@ function applyMergedProperties(
   let hasFunction = false;
 
   for (let prop in value) {
-    if (!value.hasOwnProperty(prop)) {
+    if (!Object.prototype.hasOwnProperty.call(value, prop)) {
       continue;
     }
 
@@ -342,7 +341,7 @@ function mergeMixins(
       mergings = concatenatedMixinProperties('mergedProperties', props, values, base);
 
       for (key in props) {
-        if (!props.hasOwnProperty(key)) {
+        if (!Object.prototype.hasOwnProperty.call(props, key)) {
           continue;
         }
         keys.push(key);
@@ -350,7 +349,7 @@ function mergeMixins(
       }
 
       // manually copy toString() because some JS engines do not enumerate it
-      if (props.hasOwnProperty('toString')) {
+      if (Object.prototype.hasOwnProperty.call(props, 'toString')) {
         base.toString = props.toString;
       }
     } else if (currentMixin.mixins) {
@@ -395,20 +394,23 @@ if (ALIAS_METHOD) {
   };
 }
 
-function updateObserversAndListeners(
-  obj: object,
-  key: string,
-  paths: string[] | undefined,
-  updateMethod: (
-    obj: object,
-    path: string,
-    target: object | Function | null,
-    method: string
-  ) => void
-) {
-  if (paths) {
-    for (let i = 0; i < paths.length; i++) {
-      updateMethod(obj, paths[i], null, key);
+function updateObserversAndListeners(obj: object, key: string, fn: Function, add: boolean) {
+  let observers = getObservers(fn);
+  let listeners = getListeners(fn);
+
+  if (observers !== undefined) {
+    let updateObserver = add ? addObserver : removeObserver;
+
+    for (let i = 0; i < observers.paths.length; i++) {
+      updateObserver(obj, observers.paths[i], null, key, observers.sync);
+    }
+  }
+
+  if (listeners !== undefined) {
+    let updateListener = add ? addListener : removeListener;
+
+    for (let i = 0; i < listeners.length; i++) {
+      updateListener(obj, listeners[i], null, key);
     }
   }
 }
@@ -420,13 +422,11 @@ function replaceObserversAndListeners(
   next: Function | null
 ): void {
   if (typeof prev === 'function') {
-    updateObserversAndListeners(obj, key, getObservers(prev), removeObserver);
-    updateObserversAndListeners(obj, key, getListeners(prev), removeListener);
+    updateObserversAndListeners(obj, key, prev, false);
   }
 
   if (typeof next === 'function') {
-    updateObserversAndListeners(obj, key, getObservers(next), addObserver);
-    updateObserversAndListeners(obj, key, getListeners(next), addListener);
+    updateObserversAndListeners(obj, key, next, true);
   }
 }
 
@@ -450,7 +450,7 @@ export function applyMixin(obj: { [key: string]: any }, mixins: Mixin[]) {
 
   for (let i = 0; i < keys.length; i++) {
     key = keys[i];
-    if (key === 'constructor' || !values.hasOwnProperty(key)) {
+    if (key === 'constructor' || !Object.prototype.hasOwnProperty.call(values, key)) {
       continue;
     }
 
@@ -476,12 +476,6 @@ export function applyMixin(obj: { [key: string]: any }, mixins: Mixin[]) {
     }
 
     defineProperty(obj, key, desc, value, meta);
-  }
-
-  if (EMBER_METAL_TRACKED_PROPERTIES) {
-    if (!meta.isPrototypeMeta(obj)) {
-      revalidateObservers(obj);
-    }
   }
 
   return obj;
@@ -594,7 +588,6 @@ export default class Mixin {
     this._without = undefined;
 
     if (DEBUG) {
-      this[NAME_KEY] = undefined;
       /*
         In debug builds, we seal mixins to help avoid performance pitfalls.
 
@@ -742,7 +735,6 @@ type MixinLike = Mixin | { [key: string]: any };
 Mixin.prototype.toString = classToString;
 
 if (DEBUG) {
-  Mixin.prototype[NAME_KEY] = undefined;
   Object.seal(Mixin.prototype);
 }
 
@@ -845,6 +837,8 @@ if (ALIAS_METHOD) {
 // OBSERVER HELPER
 //
 
+type ObserverDefinition = { dependentKeys: string[]; fn: Function; sync: boolean };
+
 /**
   Specify a method that observes property changes.
 
@@ -870,24 +864,48 @@ if (ALIAS_METHOD) {
   @public
   @static
 */
-export function observer(...args: (string | Function)[]) {
-  let func = args.pop();
-  let _paths = args;
+export function observer(...args: (string | Function)[]): Function;
+export function observer(definition: ObserverDefinition): Function;
+export function observer(...args: (string | Function | ObserverDefinition)[]) {
+  let funcOrDef = args.pop();
+
+  assert(
+    'observer must be provided a function or an observer definition',
+    typeof funcOrDef === 'function' || (typeof funcOrDef === 'object' && funcOrDef !== null)
+  );
+
+  let func, dependentKeys, sync;
+
+  if (typeof funcOrDef === 'function') {
+    func = funcOrDef;
+    dependentKeys = args;
+    sync = !ENV._DEFAULT_ASYNC_OBSERVERS;
+  } else {
+    func = (funcOrDef as ObserverDefinition).fn;
+    dependentKeys = (funcOrDef as ObserverDefinition).dependentKeys;
+    sync = (funcOrDef as ObserverDefinition).sync;
+  }
 
   assert('observer called without a function', typeof func === 'function');
   assert(
     'observer called without valid path',
-    _paths.length > 0 && _paths.every(p => typeof p === 'string' && Boolean(p.length))
+    Array.isArray(dependentKeys) &&
+      dependentKeys.length > 0 &&
+      dependentKeys.every(p => typeof p === 'string' && Boolean(p.length))
   );
+  assert('observer called without sync', typeof sync === 'boolean');
 
   let paths: string[] = [];
   let addWatchedProperty = (path: string) => paths.push(path);
 
-  for (let i = 0; i < _paths.length; ++i) {
-    expandProperties(_paths[i] as string, addWatchedProperty);
+  for (let i = 0; i < dependentKeys.length; ++i) {
+    expandProperties(dependentKeys[i] as string, addWatchedProperty);
   }
 
-  setObservers(func as Function, paths);
+  setObservers(func as Function, {
+    paths,
+    sync,
+  });
   return func;
 }
 

@@ -10,7 +10,7 @@ import { getDebugFunction, setDebugFunction } from '@ember/debug';
 
 const originalDebug = getDebugFunction('debug');
 
-var originalConsoleError = console.error; // eslint-disable-line no-console
+const originalConsoleError = console.error; // eslint-disable-line no-console
 let testContext;
 
 if (!jQueryDisabled) {
@@ -63,7 +63,7 @@ if (!jQueryDisabled) {
           <div class="posts-view">
             <a class="dummy-link"></a>
             <div id="comments-link">
-              {{#link-to \'comments\'}}Comments{{/link-to}}
+              {{#link-to 'comments'}}Comments{{/link-to}}
             </div>
           </div>
         `

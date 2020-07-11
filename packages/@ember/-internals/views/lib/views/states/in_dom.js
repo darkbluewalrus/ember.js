@@ -1,6 +1,5 @@
 import { teardownMandatorySetter } from '@ember/-internals/utils';
 import { assign } from '@ember/polyfills';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
 import EmberError from '@ember/error';
 import { DEBUG } from '@glimmer/env';
 import hasElement from './has_element';
@@ -14,9 +13,7 @@ const inDOM = assign({}, hasElement, {
     if (DEBUG) {
       let elementId = view.elementId;
 
-      if (EMBER_METAL_TRACKED_PROPERTIES) {
-        teardownMandatorySetter(view, 'elementId');
-      }
+      teardownMandatorySetter(view, 'elementId');
 
       Object.defineProperty(view, 'elementId', {
         configurable: true,
@@ -25,15 +22,13 @@ const inDOM = assign({}, hasElement, {
         get() {
           return elementId;
         },
-        set() {
-          throw new EmberError("Changing a view's elementId after creation is not allowed");
+        set(value) {
+          if (value !== elementId) {
+            throw new EmberError("Changing a view's elementId after creation is not allowed");
+          }
         },
       });
     }
-  },
-
-  exit(view) {
-    view.renderer.unregister(view);
   },
 });
 

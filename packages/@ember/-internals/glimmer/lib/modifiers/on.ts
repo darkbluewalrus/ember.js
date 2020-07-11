@@ -1,12 +1,19 @@
+import { Owner } from '@ember/-internals/owner';
 import { assert } from '@ember/debug';
 import { DEBUG } from '@glimmer/env';
-import { Opaque, Simple } from '@glimmer/interfaces';
-import { Tag } from '@glimmer/reference';
-import { Arguments, CapturedArguments, ModifierManager } from '@glimmer/runtime';
-import { Destroyable } from '@glimmer/util';
+import { CapturedArguments, ModifierManager, VMArguments } from '@glimmer/interfaces';
+import { registerDestructor } from '@glimmer/runtime';
+import { expect } from '@glimmer/util';
+import { CONSTANT_TAG, Tag } from '@glimmer/validator';
+import { SimpleElement } from '@simple-dom/interface';
+import { Renderer } from '../renderer';
 import buildUntouchableThis from '../utils/untouchable-this';
 
 const untouchableContext = buildUntouchableThis('`on` modifier');
+
+/**
+@module ember
+*/
 
 /*
   Internet Explorer 11 does not support `once` and also does not support
@@ -45,6 +52,7 @@ const SUPPORTS_EVENT_OPTIONS = (() => {
 
 export class OnModifierState {
   public tag: Tag;
+  public owner: Owner;
   public element: Element;
   public args: CapturedArguments;
   public eventName!: string;
@@ -56,7 +64,8 @@ export class OnModifierState {
   public options?: AddEventListenerOptions;
   public shouldUpdate = true;
 
-  constructor(element: Element, args: CapturedArguments) {
+  constructor(owner: Owner, element: Element, args: CapturedArguments) {
+    this.owner = owner;
     this.element = element;
     this.args = args;
     this.tag = args.tag;
@@ -98,20 +107,38 @@ export class OnModifierState {
       this.shouldUpdate = true;
     }
 
-    assert(
-      'You must pass a function as the second argument to the `on` modifier',
-      args.positional.at(1) !== undefined && typeof args.positional.at(1).value() === 'function'
-    );
-    let userProvidedCallback = args.positional.at(1).value() as EventListener;
+    let userProvidedCallbackReference = args.positional.at(1);
+
+    if (DEBUG) {
+      assert(
+        `You must pass a function as the second argument to the \`on\` modifier.`,
+        args.positional.at(1) !== undefined
+      );
+
+      // hardcoding `renderer:-dom` here because we guard for `this.isInteractive` before instantiating OnModifierState, it can never be created when the renderer is `renderer:-inert`
+      let renderer = expect(
+        this.owner.lookup<Renderer>('renderer:-dom'),
+        `BUG: owner is missing renderer:-dom`
+      );
+      let stack = renderer.debugRenderTree.logRenderStackForPath(userProvidedCallbackReference);
+
+      let value = userProvidedCallbackReference.value();
+      assert(
+        `You must pass a function as the second argument to the \`on\` modifier, you passed ${
+          value === null ? 'null' : typeof value
+        }. While rendering:\n\n${stack}`,
+        typeof value === 'function'
+      );
+    }
+
+    let userProvidedCallback = userProvidedCallbackReference.value() as EventListener;
     if (userProvidedCallback !== this.userProvidedCallback) {
       this.userProvidedCallback = userProvidedCallback;
       this.shouldUpdate = true;
     }
 
     assert(
-      `You can only pass two positional arguments (event name and callback) to the \`on\` modifier, but you provided ${
-        args.positional.length
-      }. Consider using the \`fn\` helper to provide additional arguments to the \`on\` callback.`,
+      `You can only pass two positional arguments (event name and callback) to the \`on\` modifier, but you provided ${args.positional.length}. Consider using the \`fn\` helper to provide additional arguments to the \`on\` callback.`,
       args.positional.length === 2
     );
 
@@ -142,12 +169,6 @@ export class OnModifierState {
         this.callback = userProvidedCallback;
       }
     }
-  }
-
-  destroy() {
-    let { element, eventName, callback, options } = this;
-
-    removeEventListener(element, eventName, callback, options);
   }
 }
 
@@ -210,34 +231,148 @@ function addEventListener(
   }
 }
 
-export default class OnModifierManager implements ModifierManager<OnModifierState, Opaque> {
+/**
+  The `{{on}}` modifier lets you easily add event listeners (it uses
+  [EventTarget.addEventListener](https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener)
+  internally).
+
+  For example, if you'd like to run a function on your component when a `<button>`
+  in the components template is clicked you might do something like:
+
+  ```app/components/like-post.hbs
+  <button {{on 'click' this.saveLike}}>Like this post!</button>
+  ```
+
+  ```app/components/like-post.js
+  import Component from '@glimmer/component';
+  import { action } from '@ember/object';
+
+  export default class LikePostComponent extends Component {
+    @action
+    saveLike() {
+      // someone likes your post!
+      // better send a request off to your server...
+    }
+  }
+  ```
+
+  ### Arguments
+
+  `{{on}}` accepts two positional arguments, and a few named arguments.
+
+  The positional arguments are:
+
+  - `event` -- the name to use when calling `addEventListener`
+  - `callback` -- the function to be passed to `addEventListener`
+
+  The named arguments are:
+
+  - capture -- a `true` value indicates that events of this type will be dispatched
+    to the registered listener before being dispatched to any EventTarget beneath it
+    in the DOM tree.
+  - once -- indicates that the listener should be invoked at most once after being
+    added. If true, the listener would be automatically removed when invoked.
+  - passive -- if `true`, indicates that the function specified by listener will never
+    call preventDefault(). If a passive listener does call preventDefault(), the user
+    agent will do nothing other than generate a console warning. See
+    [Improving scrolling performance with passive listeners](https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener#Improving_scrolling_performance_with_passive_listeners)
+    to learn more.
+
+  The callback function passed to `{{on}}` will receive any arguments that are passed
+  to the event handler. Most commonly this would be the `event` itself.
+
+  If you would like to pass additional arguments to the function you should use
+  the `{{fn}}` helper.
+
+  For example, in our example case above if you'd like to pass in the post that
+  was being liked when the button is clicked you could do something like:
+
+  ```app/components/like-post.hbs
+  <button {{on 'click' (fn this.saveLike @post)}}>Like this post!</button>
+  ```
+
+  In this case, the `saveLike` function will receive two arguments: the click event
+  and the value of `@post`.
+
+  ### Function Context
+
+  In the example above, we used `@action` to ensure that `likePost` is
+  properly bound to the `items-list`, but let's explore what happens if we
+  left out `@action`:
+
+  ```app/components/like-post.js
+  import Component from '@glimmer/component';
+
+  export default class LikePostComponent extends Component {
+    saveLike() {
+      // ...snip...
+    }
+  }
+  ```
+
+  In this example, when the button is clicked `saveLike` will be invoked,
+  it will **not** have access to the component instance. In other
+  words, it will have no `this` context, so please make sure your functions
+  are bound (via `@action` or other means) before passing into `on`!
+
+  @method on
+  @for Ember.Templates.helpers
+  @public
+  @since 3.11.0
+*/
+export default class OnModifierManager implements ModifierManager<OnModifierState | null, unknown> {
   public SUPPORTS_EVENT_OPTIONS: boolean = SUPPORTS_EVENT_OPTIONS;
+  public isInteractive: boolean;
+  private owner: Owner;
+
+  constructor(owner: Owner, isInteractive: boolean) {
+    this.isInteractive = isInteractive;
+    this.owner = owner;
+  }
 
   get counters() {
     return { adds, removes };
   }
 
-  create(element: Simple.Element | Element, _state: Opaque, args: Arguments) {
+  create(element: SimpleElement | Element, _state: unknown, args: VMArguments) {
+    if (!this.isInteractive) {
+      return null;
+    }
+
     const capturedArgs = args.capture();
 
-    return new OnModifierState(<Element>element, capturedArgs);
+    return new OnModifierState(this.owner, <Element>element, capturedArgs);
   }
 
-  getTag({ tag }: OnModifierState): Tag {
-    return tag;
+  getTag(state: OnModifierState | null): Tag {
+    if (state === null) {
+      return CONSTANT_TAG;
+    }
+
+    return state.tag;
   }
 
-  install(state: OnModifierState) {
+  install(state: OnModifierState | null) {
+    if (state === null) {
+      return;
+    }
+
     state.updateFromArgs();
 
     let { element, eventName, callback, options } = state;
 
     addEventListener(element, eventName, callback, options);
 
+    registerDestructor(state, () => removeEventListener(element, eventName, callback, options));
+
     state.shouldUpdate = false;
   }
 
-  update(state: OnModifierState) {
+  update(state: OnModifierState | null) {
+    if (state === null) {
+      return;
+    }
+
     // stash prior state for el.removeEventListener
     let { element, eventName, callback, options } = state;
 
@@ -256,7 +391,7 @@ export default class OnModifierManager implements ModifierManager<OnModifierStat
     state.shouldUpdate = false;
   }
 
-  getDestructor(state: Destroyable) {
+  getDestroyable(state: OnModifierState | null) {
     return state;
   }
 }

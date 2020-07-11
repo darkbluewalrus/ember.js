@@ -31,10 +31,6 @@ import {
   intersect,
   collect,
 } from '@ember/object/computed';
-import {
-  EMBER_METAL_TRACKED_PROPERTIES,
-  EMBER_NATIVE_DECORATOR_SUPPORT,
-} from '@ember/canary-features';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
 
 let obj;
@@ -921,7 +917,7 @@ moduleFor(
             array2: emberA([3, 4, 5]),
           });
         },
-        /\`computed\.setDiff\` requires exactly two dependent arrays/,
+        /`computed\.setDiff` requires exactly two dependent arrays/,
         'setDiff requires two dependent arrays'
       );
 
@@ -935,7 +931,7 @@ moduleFor(
             array3: emberA([7]),
           });
         },
-        /\`computed\.setDiff\` requires exactly two dependent arrays/,
+        /`computed\.setDiff` requires exactly two dependent arrays/,
         'setDiff requires two dependent arrays'
       );
     }
@@ -1516,35 +1512,33 @@ moduleFor(
   }
 );
 
-if (EMBER_NATIVE_DECORATOR_SUPPORT) {
-  moduleFor(
-    'sort - sortProperties - Native Class',
-    class extends SortWithSortPropertiesTestCase {
-      buildObject(_items, _itemSorting) {
-        let items =
-          _items ||
-          emberA([
-            { fname: 'Jaime', lname: 'Lannister', age: 34 },
-            { fname: 'Cersei', lname: 'Lannister', age: 34 },
-            { fname: 'Robb', lname: 'Stark', age: 16 },
-            { fname: 'Bran', lname: 'Stark', age: 8 },
-          ]);
+moduleFor(
+  'sort - sortProperties - Native Class',
+  class extends SortWithSortPropertiesTestCase {
+    buildObject(_items, _itemSorting) {
+      let items =
+        _items ||
+        emberA([
+          { fname: 'Jaime', lname: 'Lannister', age: 34 },
+          { fname: 'Cersei', lname: 'Lannister', age: 34 },
+          { fname: 'Robb', lname: 'Stark', age: 16 },
+          { fname: 'Bran', lname: 'Stark', age: 8 },
+        ]);
 
-        let itemSorting = _itemSorting || emberA(['lname', 'fname']);
+      let itemSorting = _itemSorting || emberA(['lname', 'fname']);
 
-        return new class {
-          items = items;
-          itemSorting = itemSorting;
+      return new (class {
+        items = items;
+        itemSorting = itemSorting;
 
-          @sort('items', 'itemSorting')
-          sortedItems;
-        }();
-      }
-
-      cleanupObject() {}
+        @sort('items', 'itemSorting')
+        sortedItems;
+      })();
     }
-  );
-}
+
+    cleanupObject() {}
+  }
+);
 
 function sortByLnameFname(a, b) {
   let lna = get(a, 'lname');
@@ -1793,32 +1787,6 @@ moduleFor(
       );
     }
 
-    ['@test changing item properties not specified via @each does not trigger a resort'](assert) {
-      if (!EMBER_METAL_TRACKED_PROPERTIES) {
-        let items = obj.get('items');
-        let cersei = items[1];
-
-        assert.deepEqual(
-          obj.get('sortedItems').mapBy('fname'),
-          ['Cersei', 'Jaime', 'Bran', 'Robb'],
-          'precond - array is initially sorted'
-        );
-
-        set(cersei, 'lname', 'Stark'); // plot twist! (possibly not canon)
-
-        // The array has become unsorted.  If your sort function is sensitive to
-        // properties, they *must* be specified as dependent item property keys or
-        // we'll be doing binary searches on unsorted arrays.
-        assert.deepEqual(
-          obj.get('sortedItems').mapBy('fname'),
-          ['Cersei', 'Jaime', 'Bran', 'Robb'],
-          'updating an unspecified property on an item does not resort it'
-        );
-      } else {
-        assert.expect(0);
-      }
-    }
-
     ['@test sort updates if additional dependent keys are present'](assert) {
       obj = EmberObject.extend({
         sortedItems: sort('items', ['sortFunction'], function() {
@@ -2056,6 +2024,8 @@ moduleFor(
         ['D', 'C', 'B', 'A'],
         'we now sort obj by thing'
       );
+
+      obj2.destroy();
     }
   }
 );

@@ -11,8 +11,7 @@ import {
   arrayContentWillChange,
 } from '@ember/-internals/metal';
 import EmberObject from '../../lib/system/object';
-import EmberArray from '../../lib/mixins/array';
-import { A as emberA } from '../../lib/mixins/array';
+import EmberArray, { A as emberA } from '../../lib/mixins/array';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
 
 /*
@@ -118,6 +117,11 @@ moduleFor(
 
       assert.equal(obj._count, 1, 'should have invoked');
     }
+
+    afterEach() {
+      obj.destroy();
+      obj = undefined;
+    }
   }
 );
 
@@ -141,7 +145,8 @@ moduleFor(
     }
 
     afterEach() {
-      obj = null;
+      obj.destroy();
+      obj = undefined;
     }
 
     async ['@test should notify observers when call with no params'](assert) {
@@ -248,6 +253,22 @@ moduleFor(
       arrayContentDidChange(obj);
       assert.deepEqual(observer._after, null);
     }
+
+    ['@test hasArrayObservers should work'](assert) {
+      assert.equal(
+        obj.hasArrayObservers,
+        true,
+        'correctly shows it has an array observer when one exists'
+      );
+
+      removeArrayObserver(obj, observer);
+
+      assert.equal(
+        obj.hasArrayObservers,
+        false,
+        'correctly shows it has an array observer when one exists'
+      );
+    }
   }
 );
 
@@ -272,6 +293,7 @@ moduleFor(
     }
 
     afterEach() {
+      ary.destroy();
       ary = null;
     }
 
@@ -376,6 +398,8 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(count, 2, 'observers should be called twice');
+
+      obj.destroy();
     }
   }
 );

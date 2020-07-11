@@ -1,5 +1,6 @@
 import { RenderingTestCase, moduleFor, classes, applyMixins, runTask } from 'internal-test-helpers';
 
+import { action } from '@ember/object';
 import { assign } from '@ember/polyfills';
 import { set } from '@ember/-internals/metal';
 
@@ -102,7 +103,7 @@ moduleFor(
     }
 
     ['@test Should bind its contents to the specified value']() {
-      this.render('{{textarea value=model.val}}', {
+      this.render('{{textarea value=this.model.val}}', {
         model: { val: 'A beautiful day in Seattle' },
       });
       this.assertTextArea({ value: 'A beautiful day in Seattle' });
@@ -133,7 +134,7 @@ moduleFor(
     }
 
     ['@test should update the value for `cut` / `input` / `change` events']() {
-      this.render('{{textarea value=model.val}}', {
+      this.render('{{textarea value=this.model.val}}', {
         model: { val: 'A beautiful day in Seattle' },
       });
       this.assertTextArea({ value: 'A beautiful day in Seattle' });
@@ -160,6 +161,16 @@ moduleFor(
 
       runTask(() => set(this.context, 'model', { val: 'A beautiful day in Seattle' }));
       this.assertTextArea({ value: 'A beautiful day in Seattle' });
+    }
+
+    ['@test triggers a method with `{{textarea key-up=this.didTrigger}}`'](assert) {
+      this.render(`{{textarea key-up=this.didTrigger}}`, {
+        didTrigger: action(function() {
+          assert.ok(true, 'action was triggered');
+        }),
+      });
+
+      this.triggerEvent('keyup', { keyCode: 65 });
     }
   }
 );

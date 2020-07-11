@@ -79,7 +79,7 @@ moduleFor(
     ['@test input disabled attribute']() {
       let model = { model: { value: false } };
 
-      this.render(`<input disabled={{model.value}}>`, model);
+      this.render(`<input disabled={{this.model.value}}>`, model);
 
       this.assert.equal(this.$inputElement().prop('disabled'), false);
 
@@ -199,6 +199,34 @@ moduleFor(
       this.setComponentValue('hola');
 
       this.assertValue('hola', 'Value is used');
+    }
+
+    ['@test GH18211 input checked attribute, without a value, works with the action helper']() {
+      this.render(`<input type="checkbox" checked {{action "someAction"}}>`, {
+        actions: { someAction() {} },
+      });
+      this.assertPropertyHasValue('checked', true);
+    }
+
+    ['@test GH18211 input checked attribute, with a value, works with the action helper']() {
+      this.render(`<input type="checkbox" checked={{true}} {{action "someAction"}}>`, {
+        actions: { someAction() {} },
+      });
+      this.assertPropertyHasValue('checked', true);
+    }
+
+    ['@test GH18211 input checked attribute, without a value, works with attributes with values']() {
+      this.render(`<input type="checkbox" checked click={{action "someAction"}}>`, {
+        actions: { someAction() {} },
+      });
+      this.assertPropertyHasValue('checked', true);
+    }
+
+    ['@test GH18211 input checked attribute, without a value, works with event attributes']() {
+      this.render(`<input type="checkbox" checked onclick={{action "someAction"}}>`, {
+        actions: { someAction() {} },
+      });
+      this.assertPropertyHasValue('checked', true);
     }
 
     // private helpers and assertions

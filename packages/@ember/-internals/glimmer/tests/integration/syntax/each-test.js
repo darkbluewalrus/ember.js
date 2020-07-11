@@ -1,6 +1,6 @@
 import { moduleFor, RenderingTestCase, applyMixins, strip, runTask } from 'internal-test-helpers';
 
-import { get, set, notifyPropertyChange } from '@ember/-internals/metal';
+import { get, set, notifyPropertyChange, computed, on } from '@ember/-internals/metal';
 import { A as emberA, ArrayProxy, RSVP } from '@ember/-internals/runtime';
 import { HAS_NATIVE_SYMBOL } from '@ember/-internals/utils';
 
@@ -1090,6 +1090,41 @@ moduleFor(
 );
 
 moduleFor(
+  'Syntax test: {{#each}} with array proxies, arrangedContent depends on external content',
+  class extends EachTest {
+    createList(items) {
+      let wrapped = emberA(items);
+      let proxy = ArrayProxy.extend({
+        arrangedContent: computed('wrappedItems.[]', function() {
+          // Slice the items to ensure that updates must be propogated
+          return this.wrappedItems.slice();
+        }),
+      }).create({
+        wrappedItems: wrapped,
+      });
+
+      return { list: proxy, delegate: wrapped };
+    }
+  }
+);
+
+moduleFor(
+  'Syntax test: {{#each}} with array proxies, content is updated after init',
+  class extends EachTest {
+    createList(items) {
+      let wrapped = emberA(items);
+      let proxy = ArrayProxy.extend({
+        setup: on('init', function() {
+          this.set('content', emberA(wrapped));
+        }),
+      }).create();
+
+      return { list: proxy, delegate: wrapped };
+    }
+  }
+);
+
+moduleFor(
   'Syntax test: {{#each as}} undefined path',
   class extends RenderingTestCase {
     ['@test keying off of `undefined` does not render']() {
@@ -1186,14 +1221,14 @@ if (typeof MutationObserver === 'function') {
 
         this.render(
           strip`
-        <h1>{{page.title}}</h1>
+          <h1>{{this.page.title}}</h1>
 
-        <ul id="posts">
-          {{#each model as |post|}}
-            <li>{{post.title}}</li>
-          {{/each}}
-        </ul>
-      `,
+          <ul id="posts">
+            {{#each this.model as |post|}}
+              <li>{{post.title}}</li>
+            {{/each}}
+          </ul>
+          `,
           { page, model }
         );
 

@@ -24,7 +24,7 @@ function expandPropertiesToArray(predicateName, properties) {
   for (let i = 0; i < properties.length; i++) {
     let property = properties[i];
     assert(
-      `Dependent keys passed to computed.${predicateName}() can\'t have spaces.`,
+      `Dependent keys passed to computed.${predicateName}() can't have spaces.`,
       property.indexOf(' ') < 0
     );
 
@@ -877,10 +877,10 @@ export const and = generateComputedWithPredicate('and', value => value);
   import { set } from '@ember/object';
   import { or } from '@ember/object/computed';
 
-  let Hamster = EmberObject.extend({
+  class Hamster {
     @or('hasJacket', 'hasUmbrella') readyForRain;
     @or('hasSunscreen', 'hasUmbrella') readyForBeach;
-  });
+  }
 
   let tomster = new Hamster();
 

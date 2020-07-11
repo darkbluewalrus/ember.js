@@ -1,20 +1,23 @@
+import { ENV } from '@ember/-internals/environment';
 import { peekMeta } from '@ember/-internals/meta';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
 import { schedule } from '@ember/runloop';
-import { CURRENT_TAG, Tag } from '@glimmer/reference';
+import { registerDestructor } from '@glimmer/runtime';
+import { combine, CURRENT_TAG, Tag, validateTag, valueForTag } from '@glimmer/validator';
 import { getChainTagsForKey } from './chain-tags';
 import changeEvent from './change_event';
 import { addListener, removeListener, sendEvent } from './events';
-import { unwatch, watch } from './watching';
 
 interface ActiveObserver {
   tag: Tag;
   path: string;
   lastRevision: number;
   count: number;
+  suspended: boolean;
 }
 
-const ACTIVE_OBSERVERS: Map<object, Map<string, ActiveObserver>> = new Map();
+const SYNC_DEFAULT = !ENV._DEFAULT_ASYNC_OBSERVERS;
+export const SYNC_OBSERVERS: Map<object, Map<string, ActiveObserver>> = new Map();
+export const ASYNC_OBSERVERS: Map<object, Map<string, ActiveObserver>> = new Map();
 
 /**
 @module @ember/object
@@ -34,20 +37,17 @@ export function addObserver(
   obj: any,
   path: string,
   target: object | Function | null,
-  method: string | Function | undefined
+  method?: string | Function,
+  sync = SYNC_DEFAULT
 ): void {
   let eventName = changeEvent(path);
 
-  addListener(obj, eventName, target, method);
+  addListener(obj, eventName, target, method, false, sync);
 
-  if (EMBER_METAL_TRACKED_PROPERTIES) {
-    let meta = peekMeta(obj);
+  let meta = peekMeta(obj);
 
-    if (meta === null || !(meta.isPrototypeMeta(obj) || meta.isInitializing())) {
-      activateObserver(obj, eventName);
-    }
-  } else {
-    watch(obj, path);
+  if (meta === null || !(meta.isPrototypeMeta(obj) || meta.isInitializing())) {
+    activateObserver(obj, eventName, sync);
   }
 }
 
@@ -65,51 +65,62 @@ export function removeObserver(
   obj: any,
   path: string,
   target: object | Function | null,
-  method: string | Function | undefined
+  method?: string | Function,
+  sync = SYNC_DEFAULT
 ): void {
   let eventName = changeEvent(path);
 
-  if (EMBER_METAL_TRACKED_PROPERTIES) {
-    let meta = peekMeta(obj);
+  let meta = peekMeta(obj);
 
-    if (meta === null || !(meta.isPrototypeMeta(obj) || meta.isInitializing())) {
-      deactivateObserver(obj, eventName);
-    }
-  } else {
-    unwatch(obj, path);
+  if (meta === null || !(meta.isPrototypeMeta(obj) || meta.isInitializing())) {
+    deactivateObserver(obj, eventName, sync);
   }
 
   removeListener(obj, eventName, target, method);
 }
 
-function getOrCreateActiveObserversFor(target: object) {
-  if (!ACTIVE_OBSERVERS.has(target)) {
-    ACTIVE_OBSERVERS.set(target, new Map());
+function getOrCreateActiveObserversFor(target: object, sync: boolean) {
+  let observerMap = sync === true ? SYNC_OBSERVERS : ASYNC_OBSERVERS;
+
+  if (!observerMap.has(target)) {
+    observerMap.set(target, new Map());
+    registerDestructor(target, () => destroyObservers(target), true);
   }
 
-  return ACTIVE_OBSERVERS.get(target)!;
+  return observerMap.get(target)!;
 }
 
-export function activateObserver(target: object, eventName: string) {
-  let activeObservers = getOrCreateActiveObserversFor(target);
+export function activateObserver(target: object, eventName: string, sync = false) {
+  let activeObservers = getOrCreateActiveObserversFor(target, sync);
 
   if (activeObservers.has(eventName)) {
     activeObservers.get(eventName)!.count++;
   } else {
     let [path] = eventName.split(':');
-    let tag = getChainTagsForKey(target, path);
+    let tag = combine(getChainTagsForKey(target, path, true));
 
     activeObservers.set(eventName, {
       count: 1,
       path,
       tag,
-      lastRevision: tag.value(),
+      lastRevision: valueForTag(tag),
+      suspended: false,
     });
   }
 }
 
-export function deactivateObserver(target: object, eventName: string) {
-  let activeObservers = ACTIVE_OBSERVERS.get(target);
+let DEACTIVATE_SUSPENDED = false;
+let SCHEDULED_DEACTIVATE: [object, string, boolean][] = [];
+
+export function deactivateObserver(target: object, eventName: string, sync = false) {
+  if (DEACTIVATE_SUSPENDED === true) {
+    SCHEDULED_DEACTIVATE.push([target, eventName, sync]);
+    return;
+  }
+
+  let observerMap = sync === true ? SYNC_OBSERVERS : ASYNC_OBSERVERS;
+
+  let activeObservers = observerMap.get(target);
 
   if (activeObservers !== undefined) {
     let observer = activeObservers.get(eventName)!;
@@ -120,10 +131,24 @@ export function deactivateObserver(target: object, eventName: string) {
       activeObservers.delete(eventName);
 
       if (activeObservers.size === 0) {
-        ACTIVE_OBSERVERS.delete(target);
+        observerMap.delete(target);
       }
     }
   }
+}
+
+export function suspendedObserverDeactivation() {
+  DEACTIVATE_SUSPENDED = true;
+}
+
+export function resumeObserverDeactivation() {
+  DEACTIVATE_SUSPENDED = false;
+
+  for (let [target, eventName, sync] of SCHEDULED_DEACTIVATE) {
+    deactivateObserver(target, eventName, sync);
+  }
+
+  SCHEDULED_DEACTIVATE = [];
 }
 
 /**
@@ -134,52 +159,92 @@ export function deactivateObserver(target: object, eventName: string) {
  * @param target
  */
 export function revalidateObservers(target: object) {
-  if (!ACTIVE_OBSERVERS.has(target)) {
-    return;
+  if (ASYNC_OBSERVERS.has(target)) {
+    ASYNC_OBSERVERS.get(target)!.forEach(observer => {
+      observer.tag = combine(getChainTagsForKey(target, observer.path, true));
+      observer.lastRevision = valueForTag(observer.tag);
+    });
   }
 
-  ACTIVE_OBSERVERS.get(target)!.forEach(observer => {
-    observer.tag = getChainTagsForKey(target, observer.path);
-    observer.lastRevision = observer.tag.value();
-  });
+  if (SYNC_OBSERVERS.has(target)) {
+    SYNC_OBSERVERS.get(target)!.forEach(observer => {
+      observer.tag = combine(getChainTagsForKey(target, observer.path, true));
+      observer.lastRevision = valueForTag(observer.tag);
+    });
+  }
 }
 
 let lastKnownRevision = 0;
 
-export function flushInvalidActiveObservers(shouldSchedule = true) {
-  if (lastKnownRevision === CURRENT_TAG.value()) {
+export function flushAsyncObservers(shouldSchedule = true) {
+  let currentRevision = valueForTag(CURRENT_TAG);
+  if (lastKnownRevision === currentRevision) {
     return;
   }
+  lastKnownRevision = currentRevision;
 
-  lastKnownRevision = CURRENT_TAG.value();
-
-  ACTIVE_OBSERVERS.forEach((activeObservers, target) => {
+  ASYNC_OBSERVERS.forEach((activeObservers, target) => {
     let meta = peekMeta(target);
 
-    if (meta && (meta.isSourceDestroying() || meta.isMetaDestroyed())) {
-      ACTIVE_OBSERVERS.delete(target);
-      return;
-    }
-
     activeObservers.forEach((observer, eventName) => {
-      if (!observer.tag.validate(observer.lastRevision)) {
+      if (!validateTag(observer.tag, observer.lastRevision)) {
         let sendObserver = () => {
           try {
-            sendEvent(target, eventName, [target, observer.path]);
+            sendEvent(target, eventName, [target, observer.path], undefined, meta);
           } finally {
-            observer.tag = getChainTagsForKey(target, observer.path);
-            observer.lastRevision = observer.tag.value();
+            observer.tag = combine(getChainTagsForKey(target, observer.path, true));
+            observer.lastRevision = valueForTag(observer.tag);
           }
         };
 
         if (shouldSchedule) {
           schedule('actions', sendObserver);
         } else {
-          // TODO: we need to schedule eagerly in exactly one location (_internalReset),
-          // for query params. We should get rid of this ASAP
           sendObserver();
         }
       }
     });
   });
+}
+
+export function flushSyncObservers() {
+  // When flushing synchronous observers, we know that something has changed (we
+  // only do this during a notifyPropertyChange), so there's no reason to check
+  // a global revision.
+
+  SYNC_OBSERVERS.forEach((activeObservers, target) => {
+    let meta = peekMeta(target);
+
+    activeObservers.forEach((observer, eventName) => {
+      if (!observer.suspended && !validateTag(observer.tag, observer.lastRevision)) {
+        try {
+          observer.suspended = true;
+          sendEvent(target, eventName, [target, observer.path], undefined, meta);
+        } finally {
+          observer.tag = combine(getChainTagsForKey(target, observer.path, true));
+          observer.lastRevision = valueForTag(observer.tag);
+          observer.suspended = false;
+        }
+      }
+    });
+  });
+}
+
+export function setObserverSuspended(target: object, property: string, suspended: boolean) {
+  let activeObservers = SYNC_OBSERVERS.get(target);
+
+  if (!activeObservers) {
+    return;
+  }
+
+  let observer = activeObservers.get(changeEvent(property));
+
+  if (observer) {
+    observer.suspended = suspended;
+  }
+}
+
+export function destroyObservers(target: object) {
+  if (SYNC_OBSERVERS.size > 0) SYNC_OBSERVERS.delete(target);
+  if (ASYNC_OBSERVERS.size > 0) ASYNC_OBSERVERS.delete(target);
 }

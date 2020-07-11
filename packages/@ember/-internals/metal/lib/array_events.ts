@@ -1,7 +1,5 @@
 import { peekMeta } from '@ember/-internals/meta';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
 import { peekCacheFor } from './computed_cache';
-import { eachProxyArrayDidChange, eachProxyArrayWillChange } from './each_proxy_events';
 import { sendEvent } from './events';
 import { notifyPropertyChange } from './property_events';
 
@@ -25,10 +23,6 @@ export function arrayContentWillChange<T extends object>(
     }
   }
 
-  if (!EMBER_METAL_TRACKED_PROPERTIES) {
-    eachProxyArrayWillChange(array, startIdx, removeAmt, addAmt);
-  }
-
   sendEvent(array, '@array:before', [array, startIdx, removeAmt, addAmt]);
 
   return array;
@@ -38,7 +32,8 @@ export function arrayContentDidChange<T extends { length: number }>(
   array: T,
   startIdx: number,
   removeAmt: number,
-  addAmt: number
+  addAmt: number,
+  notify = true
 ): T {
   // if no args are passed assume everything changes
   if (startIdx === undefined) {
@@ -56,14 +51,12 @@ export function arrayContentDidChange<T extends { length: number }>(
 
   let meta = peekMeta(array);
 
-  if (addAmt < 0 || removeAmt < 0 || addAmt - removeAmt !== 0) {
-    notifyPropertyChange(array, 'length', meta);
-  }
+  if (notify) {
+    if (addAmt < 0 || removeAmt < 0 || addAmt - removeAmt !== 0) {
+      notifyPropertyChange(array, 'length', meta);
+    }
 
-  notifyPropertyChange(array, '[]', meta);
-
-  if (!EMBER_METAL_TRACKED_PROPERTIES) {
-    eachProxyArrayDidChange(array, startIdx, removeAmt, addAmt);
+    notifyPropertyChange(array, '[]', meta);
   }
 
   sendEvent(array, '@array:change', [array, startIdx, removeAmt, addAmt]);

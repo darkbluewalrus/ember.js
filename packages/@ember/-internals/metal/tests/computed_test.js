@@ -1,24 +1,32 @@
 import { Object as EmberObject } from '@ember/-internals/runtime';
 import {
   computed,
-  getCachedValueFor,
   defineProperty,
+  getCachedValueFor,
   isClassicDecorator,
   isComputed,
   get,
   set,
-  isWatching,
   addObserver,
 } from '..';
-import { meta as metaFor } from '@ember/-internals/meta';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
+import { run } from '@ember/runloop';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
+import { destroy } from '@glimmer/runtime';
 
-let obj, count;
+let obj, objA, objB, count, func;
+
+class ComputedTestCase extends AbstractTestCase {
+  afterEach() {
+    let destroyables = [obj, objA, objB].filter(Boolean);
+    obj = objA = objB = count = func = undefined;
+    destroyables.forEach(destroy);
+    return runLoopSettled();
+  }
+}
 
 moduleFor(
   'computed',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     ['@test isComputed is true for computed property on a factory'](assert) {
       let Obj = EmberObject.extend({
         foo: computed(function() {}),
@@ -30,7 +38,7 @@ moduleFor(
     }
 
     ['@test isComputed is true for computed property on an instance'](assert) {
-      let obj = EmberObject.extend({
+      obj = EmberObject.extend({
         foo: computed(function() {}),
       }).create();
 
@@ -43,14 +51,14 @@ moduleFor(
 
     ['@test computed properties assert the presence of a getter or setter function']() {
       expectAssertion(function() {
-        let obj = {};
+        obj = {};
         defineProperty(obj, 'someProp', computed('nogetternorsetter', {}));
       }, 'Computed properties must receive a getter or a setter, you passed none.');
     }
 
     ['@test computed properties check for the presence of a function or configuration object']() {
       expectAssertion(function() {
-        let obj = {};
+        obj = {};
         defineProperty(obj, 'someProp', computed('nolastargument'));
       }, 'Attempted to use @computed on someProp, but it did not have a getter or a setter. You must either pass a get a function or getter/setter to @computed directly (e.g. `@computed({ get() { ... } })`) or apply @computed directly to a getter/setter');
     }
@@ -58,7 +66,7 @@ moduleFor(
     // non valid properties are stripped away in the process of creating a computed property descriptor
     ['@test computed properties defined with an object only allow `get` and `set` keys']() {
       expectAssertion(function() {
-        let obj = EmberObject.extend({
+        obj = EmberObject.extend({
           someProp: computed({
             get() {},
             set() {},
@@ -71,7 +79,7 @@ moduleFor(
     }
 
     ['@test computed property can be accessed without `get`'](assert) {
-      let obj = {};
+      obj = {};
       let count = 0;
       defineProperty(
         obj,
@@ -87,7 +95,7 @@ moduleFor(
     }
 
     ['@test defining computed property should invoke property on get'](assert) {
-      let obj = {};
+      obj = {};
       let count = 0;
       defineProperty(
         obj,
@@ -122,7 +130,7 @@ moduleFor(
     }
 
     ['@test can override volatile computed property'](assert) {
-      let obj = {};
+      obj = {};
 
       expectDeprecation(() => {
         defineProperty(obj, 'foo', computed(function() {}).volatile());
@@ -130,13 +138,13 @@ moduleFor(
 
       expectDeprecation(() => {
         set(obj, 'foo', 'boom');
-      }, /The \[object Object\]#foo computed property was just overriden./);
+      }, /The \[object Object\]#foo computed property was just overridden./);
 
       assert.equal(obj.foo, 'boom');
     }
 
     ['@test defining computed property should invoke property on set'](assert) {
-      let obj = {};
+      obj = {};
       let count = 0;
       defineProperty(
         obj,
@@ -174,32 +182,55 @@ moduleFor(
 
     ['@test defining a computed property with a dependent key more than one level deep beyond @each is not supported']() {
       expectNoWarning(() => {
-        let obj = {};
+        obj = {};
         defineProperty(obj, 'someProp', computed('todos', () => {}));
       });
 
       expectNoWarning(() => {
-        let obj = {};
+        obj = {};
         defineProperty(obj, 'someProp', computed('todos.@each.owner', () => {}));
       });
 
       expectWarning(() => {
-        let obj = {};
+        obj = {};
         defineProperty(obj, 'someProp', computed('todos.@each.owner.name', () => {}));
       }, /You used the key "todos\.@each\.owner\.name" which is invalid\. /);
 
       expectWarning(() => {
-        let obj = {};
+        obj = {};
         defineProperty(obj, 'someProp', computed('todos.@each.owner.@each.name', () => {}));
       }, /You used the key "todos\.@each\.owner\.@each\.name" which is invalid\. /);
+
+      let expected = new RegExp(
+        'When using @each in a dependent-key or an observer, ' +
+          'you can only chain one property level deep after the @each\\. ' +
+          'That is, `todos\\.@each\\.owner` is allowed but ' +
+          '`todos\\.@each\\.owner\\.name` \\(which is what you passed\\) is not\\.\n\n' +
+          'This was never supported\\. Currently, the extra segments ' +
+          'are silently ignored, i\\.e\\. `todos\\.@each\\.owner\\.name` ' +
+          'behaves exactly the same as `todos\\.@each\\.owner`\\. ' +
+          'In the future, this will throw an error\\.\n\n' +
+          'If the current behavior is acceptable for your use case, ' +
+          'please remove the extraneous segments by changing your key to ' +
+          '`todos\\.@each\\.owner`\\. Otherwise, please create an ' +
+          'intermediary computed property or switch to using tracked properties\\.'
+      );
+
+      expectDeprecation(() => {
+        obj = {
+          todos: [],
+        };
+        defineProperty(obj, 'someProp', computed('todos.@each.owner.name', () => {}));
+
+        get(obj, 'someProp');
+      }, expected);
     }
   }
 );
 
-let objA, objB;
 moduleFor(
   'computed should inherit through prototype',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     beforeEach() {
       objA = { __foo: 'FOO' };
       defineProperty(
@@ -218,10 +249,6 @@ moduleFor(
 
       objB = Object.create(objA);
       objB.__foo = 'FOO'; // make a copy;
-    }
-
-    afterEach() {
-      objA = objB = null;
     }
 
     ['@test using get() and set()'](assert) {
@@ -245,7 +272,7 @@ moduleFor(
 
 moduleFor(
   'redefining computed property to normal',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     beforeEach() {
       objA = { __foo: 'FOO' };
       defineProperty(
@@ -264,10 +291,6 @@ moduleFor(
 
       objB = Object.create(objA);
       defineProperty(objB, 'foo'); // make this just a normal property.
-    }
-
-    afterEach() {
-      objA = objB = null;
     }
 
     ['@test using get() and set()'](assert) {
@@ -291,7 +314,7 @@ moduleFor(
 
 moduleFor(
   'redefining computed property to another property',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     beforeEach() {
       objA = { __foo: 'FOO' };
       defineProperty(
@@ -323,10 +346,6 @@ moduleFor(
           },
         })
       );
-    }
-
-    afterEach() {
-      objA = objB = null;
     }
 
     ['@test using get() and set()'](assert) {
@@ -375,7 +394,7 @@ moduleFor(
 
 moduleFor(
   'computed - cacheable',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     beforeEach() {
       obj = {};
       count = 0;
@@ -386,9 +405,6 @@ moduleFor(
       defineProperty(obj, 'foo', computed({ get: func, set: func }));
     }
 
-    afterEach() {
-      obj = count = null;
-    }
     ['@test cacheable should cache'](assert) {
       assert.equal(get(obj, 'foo'), 'bar 1', 'first get');
       assert.equal(get(obj, 'foo'), 'bar 1', 'second get');
@@ -445,7 +461,7 @@ moduleFor(
     ['@test setting a cached computed property passes the old value as the third argument'](
       assert
     ) {
-      let obj = {
+      obj = {
         foo: 0,
       };
 
@@ -481,7 +497,7 @@ moduleFor(
 
 moduleFor(
   'computed - dependentkey',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     beforeEach() {
       obj = { bar: 'baz' };
       count = 0;
@@ -498,10 +514,6 @@ moduleFor(
           set: getterAndSetter,
         })
       );
-    }
-
-    afterEach() {
-      obj = count = null;
     }
 
     ['@test circular keys should not blow up'](assert) {
@@ -593,119 +605,41 @@ moduleFor(
     }
 
     ['@test throws an assertion if an uncached `get` is called after object is destroyed']() {
-      let meta = metaFor(obj);
-      meta.destroy();
+      run(() => destroy(obj));
 
       obj.toString = () => '<custom-obj:here>';
 
-      let message = EMBER_METAL_TRACKED_PROPERTIES
-        ? 'Attempted to access the computed <custom-obj:here>.foo on a destroyed object, which is not allowed'
-        : 'Cannot modify dependent keys for `foo` on `<custom-obj:here>` after it has been destroyed.';
+      let message =
+        'Attempted to access the computed <custom-obj:here>.foo on a destroyed object, which is not allowed';
 
       expectAssertion(() => get(obj, 'foo'), message);
     }
+
+    ['@test does not throw an assertion if an uncached `get` is called on computed without dependencies after object is destroyed'](
+      assert
+    ) {
+      defineProperty(
+        obj,
+        'foo',
+        computed(function() {
+          return 'baz';
+        })
+      );
+
+      run(() => destroy(obj));
+
+      assert.equal(get(obj, 'foo'), 'baz', 'CP calculated successfully');
+    }
   }
 );
-
-if (!EMBER_METAL_TRACKED_PROPERTIES) {
-  moduleFor(
-    'computed - dependentkey - watching',
-    class extends AbstractTestCase {
-      beforeEach() {
-        obj = { bar: 'baz' };
-        count = 0;
-        let getterAndSetter = function() {
-          count++;
-          get(this, 'bar');
-          return 'bar ' + count;
-        };
-        defineProperty(
-          obj,
-          'foo',
-          computed('bar', {
-            get: getterAndSetter,
-            set: getterAndSetter,
-          })
-        );
-      }
-
-      afterEach() {
-        obj = count = null;
-      }
-
-      ['@test should lazily watch dependent keys on set'](assert) {
-        assert.equal(isWatching(obj, 'bar'), false, 'precond not watching dependent key');
-        set(obj, 'foo', 'bar');
-        assert.equal(isWatching(obj, 'bar'), true, 'lazily watching dependent key');
-      }
-
-      ['@test should lazily watch dependent keys on get'](assert) {
-        assert.equal(isWatching(obj, 'bar'), false, 'precond not watching dependent key');
-        get(obj, 'foo');
-        assert.equal(isWatching(obj, 'bar'), true, 'lazily watching dependent key');
-      }
-
-      ['@test local dependent key should invalidate cache'](assert) {
-        assert.equal(isWatching(obj, 'bar'), false, 'precond not watching dependent key');
-        assert.equal(get(obj, 'foo'), 'bar 1', 'get once');
-        assert.equal(isWatching(obj, 'bar'), true, 'lazily setup watching dependent key');
-        assert.equal(get(obj, 'foo'), 'bar 1', 'cached retrieve');
-
-        set(obj, 'bar', 'BIFF'); // should invalidate foo
-
-        assert.equal(get(obj, 'foo'), 'bar 2', 'should recache');
-        assert.equal(get(obj, 'foo'), 'bar 2', 'cached retrieve');
-      }
-
-      ['@test should invalidate multiple nested dependent keys'](assert) {
-        let count = 0;
-        defineProperty(
-          obj,
-          'bar',
-          computed('baz', function() {
-            count++;
-            get(this, 'baz');
-            return 'baz ' + count;
-          })
-        );
-
-        assert.equal(isWatching(obj, 'bar'), false, 'precond not watching dependent key');
-        assert.equal(isWatching(obj, 'baz'), false, 'precond not watching dependent key');
-        assert.equal(get(obj, 'foo'), 'bar 1', 'get once');
-        assert.equal(isWatching(obj, 'bar'), true, 'lazily setup watching dependent key');
-        assert.equal(isWatching(obj, 'baz'), true, 'lazily setup watching dependent key');
-        assert.equal(get(obj, 'foo'), 'bar 1', 'cached retrieve');
-
-        set(obj, 'baz', 'BIFF'); // should invalidate bar -> foo
-        assert.equal(
-          isWatching(obj, 'bar'),
-          false,
-          'should not be watching dependent key after cache cleared'
-        );
-        assert.equal(
-          isWatching(obj, 'baz'),
-          false,
-          'should not be watching dependent key after cache cleared'
-        );
-
-        assert.equal(get(obj, 'foo'), 'bar 2', 'should recache');
-        assert.equal(get(obj, 'foo'), 'bar 2', 'cached retrieve');
-        assert.equal(isWatching(obj, 'bar'), true, 'lazily setup watching dependent key');
-        assert.equal(isWatching(obj, 'baz'), true, 'lazily setup watching dependent key');
-      }
-    }
-  );
-}
 
 // ..........................................................
 // CHAINED DEPENDENT KEYS
 //
 
-let func;
-
 moduleFor(
   'computed - dependentkey with chained properties',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     beforeEach() {
       obj = {
         foo: {
@@ -722,10 +656,6 @@ moduleFor(
         count++;
         return get(obj, 'foo.bar.baz.biff') + ' ' + count;
       };
-    }
-
-    afterEach() {
-      obj = count = func = null;
     }
 
     ['@test depending on simple chain'](assert) {
@@ -828,7 +758,7 @@ moduleFor(
 
       expectDeprecation(() => {
         testObj.set('aInt', '123');
-      }, /The <\(unknown\):ember\d*>#aInt computed property was just overriden/);
+      }, /The <\(unknown\):ember\d*>#aInt computed property was just overridden/);
 
       assert.ok(testObj.get('aInt') === '123', 'cp has been updated too');
     }
@@ -873,9 +803,9 @@ moduleFor(
 
 moduleFor(
   'computed edge cases',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     ['@test adding a computed property should show up in key iteration'](assert) {
-      let obj = {};
+      obj = {};
       defineProperty(obj, 'foo', computed(function() {}));
 
       let found = [];
@@ -892,7 +822,7 @@ moduleFor(
     ["@test when setting a value after it had been retrieved empty don't pass function UNDEFINED as oldValue"](
       assert
     ) {
-      let obj = {};
+      obj = {};
       let oldValueIsNoFunction = true;
 
       defineProperty(
@@ -919,9 +849,9 @@ moduleFor(
 
 moduleFor(
   'computed - setter',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     async ['@test setting a watched computed property'](assert) {
-      let obj = {
+      obj = {
         firstName: 'Yehuda',
         lastName: 'Katz',
       };
@@ -973,7 +903,7 @@ moduleFor(
     }
 
     async ['@test setting a cached computed property that modifies the value you give it'](assert) {
-      let obj = {
+      obj = {
         foo: 0,
       };
 
@@ -1020,9 +950,9 @@ moduleFor(
 
 moduleFor(
   'computed - default setter',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     async ["@test when setting a value on a computed property that doesn't handle sets"](assert) {
-      let obj = {};
+      obj = {};
       let observerFired = false;
 
       defineProperty(
@@ -1037,7 +967,7 @@ moduleFor(
 
       expectDeprecation(() => {
         set(obj, 'foo', 'bar');
-      }, /The \[object Object\]#foo computed property was just overriden./);
+      }, /The \[object Object\]#foo computed property was just overridden./);
 
       assert.equal(get(obj, 'foo'), 'bar', 'The set value is properly returned');
       assert.ok(typeof obj.foo === 'string', 'The computed property was removed');
@@ -1051,7 +981,7 @@ moduleFor(
 
 moduleFor(
   'computed - readOnly',
-  class extends AbstractTestCase {
+  class extends ComputedTestCase {
     ['@test is chainable'](assert) {
       let cp = computed(function() {});
       let readOnlyCp = cp.readOnly();
@@ -1061,7 +991,7 @@ moduleFor(
 
     ['@test throws assertion if called over a CP with a setter defined with the new syntax']() {
       expectAssertion(() => {
-        let obj = {};
+        obj = {};
         defineProperty(
           obj,
           'someProp',
@@ -1074,7 +1004,7 @@ moduleFor(
     }
 
     ['@test protects against setting'](assert) {
-      let obj = {};
+      obj = {};
 
       defineProperty(
         obj,
@@ -1088,9 +1018,192 @@ moduleFor(
 
       assert.throws(() => {
         set(obj, 'bar', 'newBar');
-      }, /Cannot set read\-only property "bar" on object:/);
+      }, /Cannot set read-only property "bar" on object:/);
 
       assert.equal(get(obj, 'bar'), 'barValue');
+    }
+  }
+);
+
+class LazyObject {
+  value = 123;
+
+  @computed('_value')
+  get value() {
+    return get(this, '_value');
+  }
+
+  set value(value) {
+    set(this, '_value', value);
+  }
+
+  static create() {
+    obj = new LazyObject();
+
+    // ensure a tag exists for the value computed
+    get(obj, 'value');
+
+    return obj;
+  }
+}
+
+moduleFor(
+  'computed - lazy dependencies',
+  class extends ComputedTestCase {
+    '@test computed properties with lazy dependencies work as expected'(assert) {
+      let calledCount = 0;
+      let lazyObject = LazyObject.create();
+
+      class ObjectWithLazyDep {
+        @computed('lazyObject.value')
+        get someProp() {
+          return ++calledCount;
+        }
+
+        @computed('otherProp')
+        get lazyObject() {
+          return lazyObject;
+        }
+      }
+
+      obj = new ObjectWithLazyDep();
+
+      // Get someProp and setup the lazy dependency
+      assert.equal(obj.someProp, 1, 'called the first time');
+      assert.equal(obj.someProp, 1, 'returned cached value the second time');
+
+      // Finish the lazy dependency
+      assert.equal(obj.lazyObject.value, 123, 'lazyObject returns expected value');
+      assert.equal(
+        obj.someProp,
+        1,
+        'someProp was not dirtied by propB being calculated for the first time'
+      );
+
+      set(lazyObject, 'value', 456);
+      assert.equal(obj.someProp, 2, 'someProp dirtied by lazyObject.value changing');
+
+      set(lazyObject, 'value', 789);
+      assert.equal(
+        obj.someProp,
+        3,
+        'someProp still dirtied by otherProp when lazyObject.value is dirty'
+      );
+    }
+
+    '@test computed properties with lazy dependencies do not dirty until dependencies have been read at least once'(
+      assert
+    ) {
+      let calledCount = 0;
+      let lazyObject = LazyObject.create();
+
+      class ObjectWithLazyDep {
+        @computed('lazyObject.value')
+        get someProp() {
+          return ++calledCount;
+        }
+
+        @computed('otherProp')
+        get lazyObject() {
+          return lazyObject;
+        }
+      }
+
+      obj = new ObjectWithLazyDep();
+
+      assert.equal(obj.someProp, 1, 'called the first time');
+      assert.equal(obj.someProp, 1, 'returned cached value the second time');
+
+      // dirty the object value before the dependency has been finished
+      set(lazyObject, 'value', 456);
+
+      assert.equal(obj.lazyObject.value, 456, 'propB returns expected value');
+      assert.equal(
+        obj.someProp,
+        1,
+        'someProp was not dirtied by propB being dirtied before it has been calculated'
+      );
+    }
+
+    '@test computed properties with lazy dependencies work correctly if lazy dependency is more recent'(
+      assert
+    ) {
+      let calledCount = 0;
+      let lazyObject = LazyObject.create();
+
+      class ObjectWithLazyDep {
+        @computed('lazyObject.value')
+        get someProp() {
+          return ++calledCount;
+        }
+
+        @computed('otherProp')
+        get lazyObject() {
+          return lazyObject;
+        }
+      }
+
+      obj = new ObjectWithLazyDep();
+
+      set(lazyObject, 'value', 456);
+
+      assert.equal(obj.someProp, 1, 'called the first time');
+      assert.equal(obj.someProp, 1, 'returned cached value the second time');
+
+      assert.equal(obj.lazyObject.value, 456, 'lazyObject returns expected value');
+
+      assert.equal(
+        obj.someProp,
+        1,
+        'someProp was not dirtied by lazyObject being dirtied before it has been calculated'
+      );
+    }
+  }
+);
+
+moduleFor(
+  'computed - observer interop',
+  class extends ComputedTestCase {
+    async '@test observers that do not consume computed properties still work'(assert) {
+      assert.expect(2);
+
+      class Foo {
+        otherProp = 123;
+
+        @computed('otherProp')
+        get someProp() {
+          return this.otherProp;
+        }
+      }
+
+      obj = new Foo();
+
+      addObserver(
+        obj,
+        'otherProp',
+        obj,
+        () => assert.ok(true, 'otherProp observer called when it was changed'),
+        false
+      );
+
+      addObserver(
+        obj,
+        'someProp',
+        obj,
+        () => assert.ok(false, 'someProp observer called when it was not changed'),
+        false
+      );
+
+      set(obj, 'otherProp', 456);
+
+      await runLoopSettled();
+
+      assert.equal(get(obj, 'someProp'), 456, '');
+
+      addObserver(obj, 'anotherProp', obj, () => {}, false);
+      set(obj, 'anotherProp', 123);
+
+      await runLoopSettled();
     }
   }
 );

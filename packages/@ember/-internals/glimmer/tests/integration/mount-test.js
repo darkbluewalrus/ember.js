@@ -1,16 +1,19 @@
 import {
   moduleFor,
   ApplicationTestCase,
+  ModuleBasedTestResolver,
   RenderingTestCase,
   runTask,
-  runLoopSettled,
 } from 'internal-test-helpers';
 
-import { getOwner } from '@ember/-internals/owner';
-import { compile, Component } from '../utils/helpers';
-import Controller from '@ember/controller';
 import { set } from '@ember/-internals/metal';
+import { getOwner } from '@ember/-internals/owner';
+import { EMBER_ROUTING_MODEL_ARG } from '@ember/canary-features';
+import Controller from '@ember/controller';
 import Engine, { getEngineParent } from '@ember/engine';
+
+import { backtrackingMessageFor } from '../utils/backtracking-rerender';
+import { compile, Component } from '../utils/helpers';
 
 moduleFor(
   '{{mount}} single param assertion',
@@ -52,6 +55,7 @@ moduleFor(
         'engine:chat',
         Engine.extend({
           router: null,
+          Resolver: ModuleBasedTestResolver,
 
           init() {
             this._super(...arguments);
@@ -120,7 +124,12 @@ moduleFor(
         { moduleName: 'my-app/templates/application.hbs' }
       );
       this.engineRegistrations['controller:application'] = Controller.extend({
-        person: { name: 'Alex' },
+        person: {
+          name: 'Alex',
+          toString() {
+            return `Person (${this.name})`;
+          },
+        },
       });
 
       this.engineRegistrations['template:components/component-with-backtracking-set'] = compile(
@@ -136,16 +145,13 @@ moduleFor(
         },
       });
 
-      let expectedBacktrackingMessage = /modified "person\.name" twice on \[object Object\] in a single render\. It was rendered in "template:my-app\/templates\/route-with-mount.hbs" \(in "engine:chat"\) and modified in "component:component-with-backtracking-set" \(in "engine:chat"\)/;
+      let expectedBacktrackingMessage = backtrackingMessageFor('name', 'Person \\(Ben\\)', {
+        renderTree: ['application', 'route-with-mount', 'chat', 'application', 'this.person.name'],
+      });
 
       await this.visit('/');
 
-      assert.throwsAssertion(
-        () => runTask(() => this.visit('/route-with-mount')),
-        expectedBacktrackingMessage
-      );
-
-      await runLoopSettled();
+      return assert.rejectsAssertion(this.visit('/route-with-mount'), expectedBacktrackingMessage);
     }
 
     ['@test it renders with a bound engine name']() {
@@ -169,6 +175,8 @@ moduleFor(
         'engine:foo',
         Engine.extend({
           router: null,
+          Resolver: ModuleBasedTestResolver,
+
           init() {
             this._super(...arguments);
             this.register(
@@ -184,6 +192,8 @@ moduleFor(
         'engine:bar',
         Engine.extend({
           router: null,
+          Resolver: ModuleBasedTestResolver,
+
           init() {
             this._super(...arguments);
             this.register(
@@ -248,6 +258,8 @@ moduleFor(
         'engine:foo',
         Engine.extend({
           router: null,
+          Resolver: ModuleBasedTestResolver,
+
           init() {
             this._super(...arguments);
             this.register(
@@ -303,13 +315,20 @@ moduleFor(
         'engine:paramEngine',
         Engine.extend({
           router: null,
+          Resolver: ModuleBasedTestResolver,
+
           init() {
             this._super(...arguments);
             this.register(
               'template:application',
-              compile('<h2>Param Engine: {{model.foo}}</h2>', {
-                moduleName: 'my-app/templates/application.hbs',
-              })
+              compile(
+                EMBER_ROUTING_MODEL_ARG
+                  ? '<h2>Param Engine: {{@model.foo}}</h2>'
+                  : '<h2>Param Engine: {{this.model.foo}}</h2>',
+                {
+                  moduleName: 'my-app/templates/application.hbs',
+                }
+              )
             );
           },
         })
@@ -392,11 +411,13 @@ moduleFor(
         'engine:componentParamEngine',
         Engine.extend({
           router: null,
+          Resolver: ModuleBasedTestResolver,
+
           init() {
             this._super(...arguments);
             this.register(
               'template:application',
-              compile('{{model.foo}}', {
+              compile(EMBER_ROUTING_MODEL_ARG ? '{{@model.foo}}' : '{{this.model.foo}}', {
                 moduleName: 'my-app/templates/application.hbs',
               })
             );
@@ -416,3 +437,43 @@ moduleFor(
     }
   }
 );
+
+if (!EMBER_ROUTING_MODEL_ARG) {
+  moduleFor(
+    '{{mount}} params tests without @model',
+    class extends ApplicationTestCase {
+      constructor() {
+        super(...arguments);
+
+        this.add(
+          'engine:paramEngine',
+          Engine.extend({
+            router: null,
+            Resolver: ModuleBasedTestResolver,
+
+            init() {
+              this._super(...arguments);
+              this.register(
+                'template:application',
+                compile('<h2>@model: {{@model}}, this.model: {{this.model}}</h2>', {
+                  moduleName: 'my-app/templates/application.hbs',
+                })
+              );
+            },
+          })
+        );
+      }
+
+      ['@test it cannot access the model via @model']() {
+        this.router.map(function() {
+          this.route('engine-params');
+        });
+        this.addTemplate('engine-params', '{{mount "paramEngine" model="foo"}}');
+
+        return this.visit('/engine-params').then(() => {
+          this.assertInnerHTML('<h2>@model: , this.model: foo</h2>');
+        });
+      }
+    }
+  );
+}

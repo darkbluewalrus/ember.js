@@ -5,12 +5,13 @@ import { setupAssertionHelpers } from './assertion';
 import { setupContainersCheck } from './containers';
 import { setupDeprecationHelpers } from './deprecation';
 import { setupNamespacesCheck } from './namespaces';
+import { setupObserversCheck } from './observers';
 import { setupRunLoopCheck } from './run-loop';
 import { DebugEnv } from './utils';
 import { setupWarningHelpers } from './warning';
 
 declare global {
-  var Ember: any;
+  let Ember: any;
 
   interface Assert {
     rejects(promise: Promise<any>, expected?: string | RegExp, message?: string): Promise<any>;
@@ -24,9 +25,8 @@ declare global {
   }
 }
 
-export default function setupQUnit({ runningProdBuild }: { runningProdBuild: boolean }) {
+export default function setupQUnit() {
   let env = {
-    runningProdBuild,
     getDebugFunction,
     setDebugFunction,
   } as DebugEnv;
@@ -37,6 +37,7 @@ export default function setupQUnit({ runningProdBuild }: { runningProdBuild: boo
     return originalModule(name, function(hooks) {
       setupContainersCheck(hooks);
       setupNamespacesCheck(hooks);
+      setupObserversCheck(hooks);
       setupRunLoopCheck(hooks);
       setupAssertionHelpers(hooks, env);
       setupDeprecationHelpers(hooks, env);
@@ -44,7 +45,7 @@ export default function setupQUnit({ runningProdBuild }: { runningProdBuild: boo
 
       callback(hooks);
     });
-  };
+  } as typeof QUnit.module;
 
   QUnit.assert.rejects = async function(
     promise: Promise<any>,

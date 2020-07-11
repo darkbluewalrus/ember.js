@@ -1,34 +1,15 @@
 'use strict';
 
-var path = require('path');
-var SimpleDOM = require('simple-dom');
-var buildOwner = require('./build-owner');
-
-var distPath = path.join(__dirname, '../../../dist');
-var emberPath = path.join(distPath, 'ember.debug');
-var templateCompilerPath = path.join(distPath, 'ember-template-compiler');
-
-var templateId;
-
-function clearEmber() {
-  delete global.Ember;
-
-  // clear the previously cached version of this module
-  delete require.cache[emberPath + '.js'];
-  delete require.cache[templateCompilerPath + '.js'];
-}
+const SimpleDOM = require('simple-dom');
+const buildOwner = require('./build-owner');
+const { loadEmber, clearEmber } = require('./load-ember');
 
 module.exports = function(hooks) {
   hooks.beforeEach(function() {
-    var precompile = require(templateCompilerPath).precompile;
-    this.compile = function compile(templateString, options) {
-      var templateSpec = precompile(templateString, options);
-      var template = new Function('return ' + templateSpec)();
+    let { Ember, compile } = loadEmber();
 
-      return this.Ember.HTMLBars.template(template);
-    };
-
-    var Ember = (this.Ember = require(emberPath));
+    this.compile = compile;
+    this.Ember = Ember;
 
     Ember.testing = true;
     this.run = Ember.run;
@@ -37,7 +18,7 @@ module.exports = function(hooks) {
   });
 
   hooks.afterEach(function() {
-    var module = this;
+    let module = this;
 
     if (this.component) {
       this.run(function() {
@@ -56,7 +37,7 @@ module.exports = function(hooks) {
 };
 
 function setupComponentTest() {
-  var module = this;
+  let module = this;
 
   module.element = new SimpleDOM.Document();
   module.owner = buildOwner(this.Ember, { resolve: function() {} });
@@ -66,7 +47,7 @@ function setupComponentTest() {
 
   this._hasRendered = false;
   let OutletView = module.owner.factoryFor('view:-outlet');
-  var OutletTemplate = module.owner.lookup('template:-outlet');
+  let outletTemplateFactory = module.owner.lookup('template:-outlet');
   module.component = OutletView.create();
   this._outletState = {
     render: {
@@ -75,13 +56,12 @@ function setupComponentTest() {
       outlet: 'main',
       name: 'application',
       controller: module,
-      template: OutletTemplate,
+      model: undefined,
+      template: outletTemplateFactory(module.owner),
     },
 
     outlets: {},
   };
-
-  templateId = 0;
 
   this.run(function() {
     module.component.setOutletState(module._outletState);
@@ -97,18 +77,17 @@ function setupComponentTest() {
 }
 
 function render(_template) {
-  var module = this;
-  var template = this.compile(_template);
+  let module = this;
+  let templateFactory = this.compile(_template);
 
-  var templateFullName = 'template:-undertest-' + ++templateId;
-  this.owner.register(templateFullName, template);
-  var stateToRender = {
+  let stateToRender = {
     owner: this.owner,
     into: undefined,
     outlet: 'main',
     name: 'index',
     controller: this,
-    template: this.owner.lookup(templateFullName),
+    model: undefined,
+    template: templateFactory(this.owner),
   };
 
   stateToRender.name = 'index';
@@ -129,7 +108,7 @@ function render(_template) {
 }
 
 function serializeElement() {
-  var serializer = new SimpleDOM.HTMLSerializer(SimpleDOM.voidMap);
+  let serializer = new SimpleDOM.HTMLSerializer(SimpleDOM.voidMap);
 
   return serializer.serialize(this.element);
 }

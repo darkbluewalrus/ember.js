@@ -3,7 +3,7 @@
 This is the issue tracker for Ember.js. The Ember.js community uses this site
 to collect and track bugs and discussions of new features. If you are having
 difficulties using Ember.js or have a question about usage, please ask a
-question on Stack Overflow: http://stackoverflow.com/questions/ask?tags=ember.js
+question on Stack Overflow: http://stackoverflow.com/questions/ask?tags=ember.js, or by joining [the community chat](https://discord.gg/emberjs).
 
 The Ember.js community is very active on Stack Overflow and most questions
 receive attention the same day they're posted:
@@ -24,10 +24,9 @@ fixed your bug.
 2. Search for similar issues. It's possible somebody has encountered
 this bug already.
 
-3. Provide Ember Twiddle or JSBin demo that specifically shows the problem. This
-demo should be fully operational with the exception of the bug you want to
-demonstrate. The more pared down, the better.
-preconfigured starting points for the latest Ember: [Ember Twiddle](http://ember-twiddle.com/) | [JSBin](http://emberjs.jsbin.com) (may not work with older IE versions due to MIME type issues).
+3. Provide [Ember Twiddle](http://ember-twiddle.com/) demo that specifically
+shows the problem. This demo should be fully operational with the exception
+of the bug you want to demonstrate. The more pared down, the better.
 If it is not possible to produce a fiddle, please make sure you provide very
 specific steps to reproduce the error. If we cannot reproduce it, we will
 close the ticket.
@@ -143,7 +142,8 @@ example:
 To test multiple packages, you can separate them with commas.
 
 You can also pass `jquery=VERSION` in the test URL to test different
-versions of jQuery.
+versions of jQuery. You can also pass `jquery=none` to run tests without jQuery
+integration.
 
 ## From the CLI
 
@@ -258,7 +258,7 @@ When you submit your PR (or later change that code), a Travis build will automat
 
 Within the Travis build, you can see that we (currently) run six different test suites.
 
-* The `each-package-tests` test suite is closest to what you normally run locally on your machine.
+* The `each-package` test suite is closest to what you normally run locally on your machine.
 * The `build-tests EMBER_ENV=production...` test suite runs tests against a production build.
 * The `browserstack` test suite runs tests against various supported browsers.
 
@@ -266,13 +266,16 @@ Within the Travis build, you can see that we (currently) run six different test 
 
 ### Production Build Failures
 
-If your build is failing on the 'production' suite, you may be relying on a debug-only function that does not even exist in a production build (`Ember.warn`, `Ember.deprecate`, `Ember.assert`, etc.).  These will pass on the 'each-package-tests' suite (and locally) because those functions are present in development builds.
+If your build is failing on the 'production' suite, you may be relying on a debug-only function that does not even exist in a production build (`Ember.warn`, `Ember.deprecate`, `Ember.assert`, etc.).  These will pass on the 'each-package' suite (and locally) because those functions are present in development builds.
 
 There are helpers for many of these functions, which will resolve this for you: `expectDeprecation`, `expectAssertion`, etc.  Please use these helpers when dealing with these functions.
 
-If your tests can't aren't covered a helper, one common solution is the use of `EmberDev.runningProdBuild`.  Wrapping the debug-only dependent test in a check of this flag will cause that test to not be run in the prod test suite:
+If your tests can't aren't covered a helper, one common solution is the use of `DEBUG` flag.  Wrapping the debug-only dependent test in a check of this flag will cause that test to not be run in the prod test suite:
+
 ```javascript
-if (EmberDev && !EmberDev.runningProdBuild) {
+import { DEBUG } from '@glimmer/env';
+
+if (DEBUG) {
   // Development-only test goes here
 }
 ```

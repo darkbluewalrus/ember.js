@@ -4,6 +4,7 @@ import EmberObject from '../../lib/system/object';
 import Evented from '../../lib/mixins/evented';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
 import { FUNCTION_PROTOTYPE_EXTENSIONS } from '@ember/deprecated-features';
+import { destroy } from '@glimmer/runtime';
 
 moduleFor(
   'Function.prototype.observes() helper',
@@ -38,6 +39,8 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 2, 'should invoke observer after change');
+
+      destroy(obj);
     }
   }
 );
@@ -100,6 +103,8 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(get(obj, 'count'), 2, 'should invoke observer and listener');
+
+      destroy(obj);
     }
   }
 );

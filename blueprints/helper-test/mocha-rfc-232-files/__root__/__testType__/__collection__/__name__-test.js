@@ -2,12 +2,12 @@ import { expect } from 'chai';
 <% if (testType == 'integration') { %>import { describe, it } from 'mocha';
 import { setupRenderingTest } from 'ember-mocha';
 import { render } from '@ember/test-helpers';
-import hbs from 'htmlbars-inline-precompile';
+<%= hbsImportStatement %>
 
 describe('<%= friendlyTestName %>', function() {
   setupRenderingTest();
 
-  // Replace this with your real tests.
+  // TODO: Replace this with your real tests.
   it('renders', async function() {
     this.set('inputValue', '1234');
 
@@ -20,7 +20,7 @@ import { <%= camelizedModuleName %> } from '<%= dasherizedPackageName %>/helpers
 
 describe('<%= friendlyTestName %>', function() {
 
-  // Replace this with your real tests.
+  // TODO: Replace this with your real tests.
   it('works', function() {
     let result = <%= camelizedModuleName %>(42);
     expect(result).to.be.ok;

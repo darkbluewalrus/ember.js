@@ -1,17 +1,17 @@
 import {
   alias,
+  computed,
   defineProperty,
   get,
   set,
-  isWatching,
   addObserver,
   removeObserver,
-  tagFor,
   tagForProperty,
 } from '..';
 import { Object as EmberObject } from '@ember/-internals/runtime';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
 import { moduleFor, AbstractTestCase, runLoopSettled } from 'internal-test-helpers';
+import { destroy } from '@glimmer/runtime';
+import { valueForTag, validateTag } from '@glimmer/validator';
 
 let obj, count;
 
@@ -28,7 +28,11 @@ moduleFor(
     }
 
     afterEach() {
-      obj = null;
+      if (obj !== undefined) {
+        destroy(obj);
+        obj = undefined;
+        return runLoopSettled();
+      }
     }
 
     ['@test should proxy get to alt key'](assert) {
@@ -48,9 +52,6 @@ moduleFor(
       defineProperty(obj1, 'bar', alias('foo'));
       defineProperty(obj1, 'baz', alias('foo'));
       defineProperty(obj1, 'baz', alias('bar')); // redefine baz
-
-      // bootstrap the alias
-      obj1.baz;
 
       addObserver(obj1, 'baz', incrementCount);
 
@@ -83,9 +84,6 @@ moduleFor(
       let obj2 = obj1.create();
       defineProperty(obj2, 'baz', alias('bar')); // override baz
 
-      // bootstrap the alias
-      obj2.baz;
-
       set(obj2, 'foo', 'FOO');
       await runLoopSettled();
 
@@ -102,9 +100,6 @@ moduleFor(
     async ['@test an observer of the alias works if added after defining the alias'](assert) {
       defineProperty(obj, 'bar', alias('foo.faz'));
 
-      // bootstrap the alias
-      obj.bar;
-
       addObserver(obj, 'bar', incrementCount);
       set(obj, 'foo.faz', 'BAR');
 
@@ -116,9 +111,6 @@ moduleFor(
       addObserver(obj, 'bar', incrementCount);
       defineProperty(obj, 'bar', alias('foo.faz'));
 
-      // bootstrap the alias
-      obj.bar;
-
       set(obj, 'foo.faz', 'BAR');
 
       await runLoopSettled();
@@ -129,11 +121,11 @@ moduleFor(
       defineProperty(obj, 'bar', alias('foo.faz'));
       get(obj, 'bar');
 
-      let tag = EMBER_METAL_TRACKED_PROPERTIES ? tagForProperty(obj, 'bar') : tagFor(obj);
-      let tagValue = tag.value();
+      let tag = tagForProperty(obj, 'bar');
+      let tagValue = valueForTag(tag);
       set(obj, 'foo.faz', 'BAR');
 
-      assert.ok(!tag.validate(tagValue), 'setting the aliased key should dirty the object');
+      assert.ok(!validateTag(tag, tagValue), 'setting the aliased key should dirty the object');
     }
 
     ['@test setting alias on self should fail assertion']() {
@@ -143,86 +135,23 @@ moduleFor(
       );
     }
 
-    ['@test destroyed alias does not disturb watch count'](assert) {
-      if (!EMBER_METAL_TRACKED_PROPERTIES) {
-        defineProperty(obj, 'bar', alias('foo.faz'));
-
-        assert.equal(get(obj, 'bar'), 'FOO');
-        assert.ok(isWatching(obj, 'foo.faz'));
-
-        defineProperty(obj, 'bar', null);
-
-        assert.notOk(isWatching(obj, 'foo.faz'));
-      } else {
-        assert.expect(0);
-      }
-    }
-
-    ['@test setting on oneWay alias does not disturb watch count'](assert) {
-      if (!EMBER_METAL_TRACKED_PROPERTIES) {
-        defineProperty(obj, 'bar', alias('foo.faz').oneWay());
-
-        assert.equal(get(obj, 'bar'), 'FOO');
-        assert.ok(isWatching(obj, 'foo.faz'));
-
-        set(obj, 'bar', null);
-
-        assert.notOk(isWatching(obj, 'foo.faz'));
-      } else {
-        assert.expect(0);
-      }
-    }
-
-    ['@test redefined alias with observer does not disturb watch count'](assert) {
-      if (!EMBER_METAL_TRACKED_PROPERTIES) {
-        defineProperty(obj, 'bar', alias('foo.faz').oneWay());
-
-        assert.equal(get(obj, 'bar'), 'FOO');
-        assert.ok(isWatching(obj, 'foo.faz'));
-
-        addObserver(obj, 'bar', incrementCount);
-
-        assert.equal(count, 0);
-
-        set(obj, 'bar', null);
-
-        assert.equal(count, 1);
-        assert.notOk(isWatching(obj, 'foo.faz'));
-
-        defineProperty(obj, 'bar', alias('foo.faz'));
-
-        assert.equal(count, 1);
-        assert.ok(isWatching(obj, 'foo.faz'));
-
-        set(obj, 'foo.faz', 'great');
-
-        assert.equal(count, 2);
-      } else {
-        assert.expect(0);
-      }
-    }
-
     ['@test property tags are bumped when the source changes [GH#17243]'](assert) {
       function assertPropertyTagChanged(obj, keyName, callback) {
         let tag = tagForProperty(obj, keyName);
-        let before = tag.value();
+        let before = valueForTag(tag);
 
         callback();
 
-        let after = tag.value();
-
-        assert.notEqual(after, before, `tagForProperty ${keyName} should change`);
+        assert.notOk(validateTag(tag, before), `tagForProperty ${keyName} should change`);
       }
 
       function assertPropertyTagUnchanged(obj, keyName, callback) {
         let tag = tagForProperty(obj, keyName);
-        let before = tag.value();
+        let before = valueForTag(tag);
 
         callback();
 
-        let after = tag.value();
-
-        assert.equal(after, before, `tagForProperty ${keyName} should not change`);
+        assert.ok(validateTag(tag, before), `tagForProperty ${keyName} should not change`);
       }
 
       defineProperty(obj, 'bar', alias('foo.faz'));
@@ -240,7 +169,6 @@ moduleFor(
       });
 
       assertPropertyTagUnchanged(obj, 'bar', () => {
-        // trigger willWatch, then didUnwatch
         addObserver(obj, 'bar', incrementCount);
         removeObserver(obj, 'bar', incrementCount);
       });
@@ -252,6 +180,39 @@ moduleFor(
       assertPropertyTagUnchanged(obj, 'bar', () => {
         assert.equal(get(obj, 'bar'), 'FOO');
       });
+    }
+
+    ['@test nested aliases update their chained dependencies properly'](assert) {
+      let count = 0;
+
+      class Inner {
+        @alias('pojo') aliased;
+
+        pojo = {
+          value: 123,
+        };
+      }
+
+      class Outer {
+        @computed('inner.aliased.value')
+        get value() {
+          count++;
+          return this.inner.aliased.value;
+        }
+
+        inner = new Inner();
+      }
+
+      let outer = new Outer();
+
+      assert.equal(outer.value, 123, 'Property works');
+
+      outer.value;
+      assert.equal(count, 1, 'Property was properly cached');
+
+      set(outer, 'inner.pojo.value', 456);
+
+      assert.equal(outer.value, 456, 'Property was invalidated correctly');
     }
   }
 );

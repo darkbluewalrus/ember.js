@@ -1,4 +1,5 @@
 import { FUNCTION_PROTOTYPE_EXTENSIONS } from '@ember/deprecated-features';
+import { DEBUG } from '@glimmer/env';
 import global from './global';
 
 /**
@@ -99,6 +100,38 @@ export const ENV = {
   _TEMPLATE_ONLY_GLIMMER_COMPONENTS: false,
 
   /**
+    Whether to perform extra bookkeeping needed to make the `captureRenderTree`
+    API work.
+
+    This has to be set before the ember JavaScript code is evaluated. This is
+    usually done by setting `window.EmberENV = { _DEBUG_RENDER_TREE: true };`
+    before the "vendor" `<script>` tag in `index.html`.
+
+    Setting the flag after Ember is already loaded will not work correctly. It
+    may appear to work somewhat, but fundamentally broken.
+
+    This is not intended to be set directly. Ember Inspector will enable the
+    flag on behalf of the user as needed.
+
+    This flag is always on in development mode.
+
+    The flag is off by default in production mode, due to the cost associated
+    with the the bookkeeping work.
+
+    The expected flow is that Ember Inspector will ask the user to refresh the
+    page after enabling the feature. It could also offer a feature where the
+    user add some domains to the "always on" list. In either case, Ember
+    Inspector will inject the code on the page to set the flag if needed.
+
+    @property _DEBUG_RENDER_TREE
+    @for EmberENV
+    @type Boolean
+    @default false
+    @private
+  */
+  _DEBUG_RENDER_TREE: DEBUG,
+
+  /**
     Whether the app is using jQuery. See RFC #294.
 
     This is not intended to be set directly, as the implementation may change in
@@ -111,6 +144,20 @@ export const ENV = {
     @private
   */
   _JQUERY_INTEGRATION: true,
+
+  /**
+    Whether the app defaults to using async observers.
+
+    This is not intended to be set directly, as the implementation may change in
+    the future. Use `@ember/optional-features` instead.
+
+    @property _DEFAULT_ASYNC_OBSERVERS
+    @for EmberENV
+    @type Boolean
+    @default false
+    @private
+  */
+  _DEFAULT_ASYNC_OBSERVERS: false,
 
   /**
     Controls the maximum number of scheduled rerenders without "settling". In general,
@@ -139,7 +186,7 @@ export const ENV = {
 
   for (let flag in EmberENV) {
     if (
-      !EmberENV.hasOwnProperty(flag) ||
+      !Object.prototype.hasOwnProperty.call(EmberENV, flag) ||
       flag === 'EXTEND_PROTOTYPES' ||
       flag === 'EMBER_LOAD_HOOKS'
     )
@@ -175,7 +222,7 @@ export const ENV = {
   let { EMBER_LOAD_HOOKS } = EmberENV;
   if (typeof EMBER_LOAD_HOOKS === 'object' && EMBER_LOAD_HOOKS !== null) {
     for (let hookName in EMBER_LOAD_HOOKS) {
-      if (!EMBER_LOAD_HOOKS.hasOwnProperty(hookName)) continue;
+      if (!Object.prototype.hasOwnProperty.call(EMBER_LOAD_HOOKS, hookName)) continue;
       let hooks = EMBER_LOAD_HOOKS[hookName];
       if (Array.isArray(hooks)) {
         ENV.EMBER_LOAD_HOOKS[hookName] = hooks.filter(hook => typeof hook === 'function');
@@ -185,11 +232,15 @@ export const ENV = {
   let { FEATURES } = EmberENV;
   if (typeof FEATURES === 'object' && FEATURES !== null) {
     for (let feature in FEATURES) {
-      if (!FEATURES.hasOwnProperty(feature)) continue;
+      if (!Object.prototype.hasOwnProperty.call(FEATURES, feature)) continue;
       ENV.FEATURES[feature] = FEATURES[feature] === true;
     }
   }
-})(global.EmberENV || global.ENV);
+
+  if (DEBUG) {
+    ENV._DEBUG_RENDER_TREE = true;
+  }
+})(global.EmberENV);
 
 export function getENV() {
   return ENV;

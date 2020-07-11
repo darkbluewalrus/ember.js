@@ -2,6 +2,7 @@ import { getOwner, setOwner } from '@ember/-internals/owner';
 import { get, set, observer } from '@ember/-internals/metal';
 import CoreObject from '../../lib/system/core_object';
 import { moduleFor, AbstractTestCase, buildOwner, runLoopSettled } from 'internal-test-helpers';
+import { track } from '@glimmer/validator';
 
 moduleFor(
   'Ember.CoreObject',
@@ -38,7 +39,7 @@ moduleFor(
       obj.toString();
 
       assert.notOk(
-        obj.hasOwnProperty('toString'),
+        Object.prototype.hasOwnProperty.call(obj, 'toString'),
         'Calling toString() should not create a toString class property'
       );
     }
@@ -129,6 +130,27 @@ moduleFor(
       await runLoopSettled();
 
       assert.equal(callCount, 1);
+
+      test.destroy();
+    }
+
+    ['@test native getters/setters do not cause rendering invalidation during init'](assert) {
+      let objectMeta = Object.create(null);
+
+      class TestObject extends CoreObject {
+        get hiddenValue() {
+          let v = get(objectMeta, 'hiddenValue');
+          return v !== undefined ? v : false;
+        }
+        set hiddenValue(v) {
+          set(objectMeta, 'hiddenValue', v);
+        }
+      }
+
+      track(() => {
+        TestObject.create({ hiddenValue: true });
+        assert.ok(true, 'We did not error');
+      });
     }
   }
 );

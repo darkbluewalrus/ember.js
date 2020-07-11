@@ -2,31 +2,25 @@
 @module ember
 */
 
-import { combine, CONSTANT_TAG, DirtyableTag, UpdatableTag } from '@glimmer/reference';
 import { meta } from '@ember/-internals/meta';
 import {
   get,
   set,
-  addObserver,
-  removeObserver,
-  notifyPropertyChange,
   defineProperty,
   Mixin,
-  tagFor,
+  tagForObject,
   computed,
-  UNKNOWN_PROPERTY_TAG,
+  CUSTOM_TAG_FOR,
   getChainTagsForKey,
 } from '@ember/-internals/metal';
-import { setProxy } from '@ember/-internals/utils';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
+import { setProxy, setupMandatorySetter } from '@ember/-internals/utils';
 import { assert } from '@ember/debug';
+import { DEBUG } from '@glimmer/env';
+import { combine, updateTag, tagFor } from '@glimmer/validator';
 
-export function contentFor(proxy, m) {
+export function contentFor(proxy) {
   let content = get(proxy, 'content');
-  let tag = (m === undefined ? meta(proxy) : m).readableTag();
-  if (tag !== undefined) {
-    tag.inner.second.inner.update(tagFor(content));
-  }
+  updateTag(tagForObject(proxy), tagForObject(content));
   return content;
 }
 
@@ -43,17 +37,16 @@ export default Mixin.create({
     The object whose properties will be forwarded.
 
     @property content
-    @type EmberObject
+    @type {unknown}
     @default null
-    @private
+    @public
   */
   content: null,
 
   init() {
     this._super(...arguments);
     setProxy(this);
-    let m = meta(this);
-    m.writableTag(() => combine([DirtyableTag.create(), UpdatableTag.create(CONSTANT_TAG)]));
+    tagForObject(this);
   },
 
   willDestroy() {
@@ -65,30 +58,23 @@ export default Mixin.create({
     return Boolean(get(this, 'content'));
   }),
 
-  willWatchProperty(key) {
-    if (!EMBER_METAL_TRACKED_PROPERTIES) {
-      let contentKey = `content.${key}`;
-      addObserver(this, contentKey, null, '_contentPropertyDidChange');
-    }
-  },
+  [CUSTOM_TAG_FOR](key, addMandatorySetter) {
+    let tag = tagFor(this, key);
 
-  didUnwatchProperty(key) {
-    if (!EMBER_METAL_TRACKED_PROPERTIES) {
-      let contentKey = `content.${key}`;
-      removeObserver(this, contentKey, null, '_contentPropertyDidChange');
+    if (DEBUG) {
+      // TODO: Replace this with something more first class for tracking tags in DEBUG
+      tag._propertyKey = key;
     }
-  },
 
-  _contentPropertyDidChange(content, contentKey) {
-    let key = contentKey.slice(8); // remove "content."
     if (key in this) {
-      return;
-    } // if shadowed in proxy
-    notifyPropertyChange(this, key);
-  },
+      if (DEBUG && addMandatorySetter) {
+        setupMandatorySetter(tag, this, key);
+      }
 
-  [UNKNOWN_PROPERTY_TAG](key) {
-    return getChainTagsForKey(this, `content.${key}`);
+      return tag;
+    } else {
+      return combine([tag, ...getChainTagsForKey(this, `content.${key}`, addMandatorySetter)]);
+    }
   },
 
   unknownProperty(key) {
@@ -108,10 +94,10 @@ export default Mixin.create({
       return value;
     }
 
-    let content = contentFor(this, m);
+    let content = contentFor(this);
 
     assert(
-      `Cannot delegate set('${key}', ${value}) to the \'content\' property of object proxy ${this}: its 'content' is undefined.`,
+      `Cannot delegate set('${key}', ${value}) to the 'content' property of object proxy ${this}: its 'content' is undefined.`,
       content
     );
 

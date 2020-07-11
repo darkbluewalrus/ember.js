@@ -1,10 +1,9 @@
 import { assert } from '@ember/debug';
 import { DEBUG } from '@glimmer/env';
-import { Arguments, VM } from '@glimmer/runtime';
-import { ICapturedArguments } from '@glimmer/runtime/dist/types/lib/vm/arguments';
-import { Opaque } from '@glimmer/util';
-import { InternalHelperReference, INVOKE } from '../utils/references';
+import { CapturedArguments, Environment, VM, VMArguments } from '@glimmer/interfaces';
+import { HelperRootReference } from '@glimmer/reference';
 import buildUntouchableThis from '../utils/untouchable-this';
+import { INVOKE } from './mut';
 
 const context = buildUntouchableThis('`fn` helper');
 
@@ -49,7 +48,7 @@ const context = buildUntouchableThis('`fn` helper');
 
   - When invoked as `this.args.select()` the `handleSelected` function will
     receive the `item` from the loop as its first and only argument.
-  - When invoked as `this.args.selected('foo')` the `handleSelected` function
+  - When invoked as `this.args.select('foo')` the `handleSelected` function
     will receive the `item` from the loop as its first argument and the
     string `'foo'` as its second argument.
 
@@ -80,19 +79,26 @@ const context = buildUntouchableThis('`fn` helper');
   @since 3.11.0
 */
 
-function fnHelper({ positional }: ICapturedArguments) {
+function fn({ positional }: CapturedArguments, env?: Environment<unknown>) {
   let callbackRef = positional.at(0);
+
+  assert(
+    `You must pass a function as the \`fn\` helpers first argument.`,
+    callbackRef !== undefined
+  );
 
   if (DEBUG && typeof callbackRef[INVOKE] !== 'function') {
     let callback = callbackRef.value();
 
     assert(
-      `You must pass a function as the \`fn\` helpers first argument, you passed ${callback}`,
+      `You must pass a function as the \`fn\` helpers first argument, you passed ${
+        callback === null ? 'null' : typeof callback
+      }. ${env!.getTemplatePathDebugContext(callbackRef)}`,
       typeof callback === 'function'
     );
   }
 
-  return (...invocationArgs: Opaque[]) => {
+  return (...invocationArgs: unknown[]) => {
     let [fn, ...args] = positional.value();
 
     if (typeof callbackRef[INVOKE] === 'function') {
@@ -100,11 +106,18 @@ function fnHelper({ positional }: ICapturedArguments) {
       // the symbol to be bound to the reference
       return callbackRef[INVOKE](...args, ...invocationArgs);
     } else {
-      return fn!['call'](context, ...args, ...invocationArgs);
+      return (fn as Function).call(context, ...args, ...invocationArgs);
     }
   };
 }
 
-export default function(_vm: VM, args: Arguments) {
-  return new InternalHelperReference(fnHelper, args.capture());
+export default function(args: VMArguments, vm: VM) {
+  let callback = fn;
+  if (DEBUG) {
+    callback = (args: CapturedArguments) => {
+      return fn(args, vm.env);
+    };
+  }
+
+  return new HelperRootReference(callback, args.capture(), vm.env);
 }

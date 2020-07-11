@@ -1,4 +1,4 @@
-/* globals EmberDev */
+import { DEBUG } from '@glimmer/env';
 
 import { RenderingTestCase, moduleFor, applyMixins, classes, runTask } from 'internal-test-helpers';
 
@@ -10,61 +10,149 @@ import { HAS_NATIVE_SYMBOL } from '@ember/-internals/utils';
 import { constructStyleDeprecationMessage } from '@ember/-internals/views';
 import { Component, SafeString, htmlSafe } from '../utils/helpers';
 
-moduleFor(
-  'Static content tests',
-  class extends RenderingTestCase {
-    ['@test it can render a static text node']() {
-      this.render('hello');
-      let text1 = this.assertTextNode(this.firstChild, 'hello');
+const EMPTY = Object.freeze({});
 
-      runTask(() => this.rerender());
+const LITERALS = [
+  ['foo', 'foo', '"foo"'],
+  [undefined, EMPTY],
+  [null, EMPTY],
+  [true, 'true'],
+  [false, 'false'],
+  [0, '0'],
+  [-0, '0', '-0'],
+  [1, '1'],
+  [-1, '-1'],
+  [0.0, '0', '0.0'],
+  [0.5, '0.5', '0.5'],
+  [0.5, '0.5', '0.500000000000000000000000000000'],
 
-      let text2 = this.assertTextNode(this.firstChild, 'hello');
+  // Kris Selden: that is a good one because it is above that 3 bit area,
+  // but the shifted < 0 check doesn't return true:
+  // https://github.com/glimmerjs/glimmer-vm/blob/761e78b2bef5de8b9b19ae5fb296380c21959ef8/packages/%40glimmer/opcode-compiler/lib/opcode-builder/encoder.ts#L277
+  [536870912, '536870912'],
 
-      this.assertSameNode(text1, text2);
-    }
+  // Kris Selden: various other 10000000 and 1111111 combos
+  [4294967296, '4294967296'],
+  [4294967295, '4294967295'],
+  [4294967294, '4294967294'],
+  [536870913, '536870913'],
+  [536870911, '536870911'],
+  [268435455, '268435455'],
+];
 
-    ['@test it can render a static element']() {
-      this.render('<p>hello</p>');
-      let p1 = this.assertElement(this.firstChild, { tagName: 'p' });
-      let text1 = this.assertTextNode(this.firstChild.firstChild, 'hello');
+let i = Number.MAX_SAFE_INTEGER;
 
-      runTask(() => this.rerender());
+while (i > 1) {
+  LITERALS.push([i, `${i}`, `${i}`]);
+  i = Math.round(i / 2);
+}
 
-      let p2 = this.assertElement(this.firstChild, { tagName: 'p' });
-      let text2 = this.assertTextNode(this.firstChild.firstChild, 'hello');
+i = Number.MIN_SAFE_INTEGER;
 
-      this.assertSameNode(p1, p2);
-      this.assertSameNode(text1, text2);
-    }
+while (i < -1) {
+  LITERALS.push([i, `${i}`, `${i}`]);
+  i = Math.round(i / 2);
+}
 
-    ['@test it can render a static template']() {
-      let template = `
-      <div class="header">
-        <h1>Welcome to Ember.js</h1>
-      </div>
-      <div class="body">
-        <h2>Why you should use Ember.js?</h2>
-        <ol>
-          <li>It's great</li>
-          <li>It's awesome</li>
-          <li>It's Ember.js</li>
-        </ol>
-      </div>
-      <div class="footer">
-        Ember.js is free, open source and always will be.
-      </div>
-    `;
+class StaticContentTest extends RenderingTestCase {
+  ['@test it can render a static text node']() {
+    this.render('hello');
+    let text1 = this.assertTextNode(this.firstChild, 'hello');
 
-      this.render(template);
-      this.assertHTML(template);
+    runTask(() => this.rerender());
 
-      runTask(() => this.rerender());
+    let text2 = this.assertTextNode(this.firstChild, 'hello');
 
-      this.assertHTML(template);
-    }
+    this.assertSameNode(text1, text2);
   }
-);
+
+  ['@test it can render a static element']() {
+    this.render('<p>hello</p>');
+    let p1 = this.assertElement(this.firstChild, { tagName: 'p' });
+    let text1 = this.assertTextNode(this.firstChild.firstChild, 'hello');
+
+    runTask(() => this.rerender());
+
+    let p2 = this.assertElement(this.firstChild, { tagName: 'p' });
+    let text2 = this.assertTextNode(this.firstChild.firstChild, 'hello');
+
+    this.assertSameNode(p1, p2);
+    this.assertSameNode(text1, text2);
+  }
+
+  ['@test it can render a static template']() {
+    let template = `
+    <div class="header">
+      <h1>Welcome to Ember.js</h1>
+    </div>
+    <div class="body">
+      <h2>Why you should use Ember.js?</h2>
+      <ol>
+        <li>It's great</li>
+        <li>It's awesome</li>
+        <li>It's Ember.js</li>
+      </ol>
+    </div>
+    <div class="footer">
+      Ember.js is free, open source and always will be.
+    </div>
+  `;
+
+    this.render(template);
+    this.assertHTML(template);
+
+    runTask(() => this.rerender());
+
+    this.assertHTML(template);
+  }
+}
+
+class StaticContentTestGenerator {
+  constructor(cases, tag = '@test') {
+    this.cases = cases;
+    this.tag = tag;
+  }
+
+  generate([value, expected, label]) {
+    let tag = this.tag;
+    label = label || value;
+
+    return {
+      [`${tag} rendering {{${label}}}`]() {
+        this.render(`{{${label}}}`);
+
+        if (expected === EMPTY) {
+          this.assertHTML('');
+        } else {
+          this.assertHTML(expected);
+        }
+
+        this.assertStableRerender();
+      },
+
+      [`${tag} rendering {{to-js ${label}}}`](assert) {
+        this.registerHelper('to-js', ([actual]) => {
+          assert.strictEqual(actual, value);
+          return actual;
+        });
+
+        this.render(`{{to-js ${label}}}`);
+
+        if (expected === EMPTY) {
+          this.assertHTML('');
+        } else {
+          this.assertHTML(expected);
+        }
+
+        this.assertStableRerender();
+      },
+    };
+  }
+}
+
+applyMixins(StaticContentTest, new StaticContentTestGenerator(LITERALS));
+
+moduleFor('Static content tests', StaticContentTest);
 
 class DynamicContentTest extends RenderingTestCase {
   /* abstract */
@@ -588,9 +676,7 @@ class DynamicContentTest extends RenderingTestCase {
   }
 }
 
-const EMPTY = {};
-
-class ContentTestGenerator {
+class DynamicContentTestGenerator {
   constructor(cases, tag = '@test') {
     this.cases = cases;
     this.tag = tag;
@@ -639,18 +725,8 @@ class ContentTestGenerator {
   }
 }
 
-const SharedContentTestCases = new ContentTestGenerator([
-  ['foo', 'foo'],
-  [0, '0'],
-  [-0, '0', '-0'],
-  [1, '1'],
-  [-1, '-1'],
-  [0.0, '0', '0.0'],
-  [0.5, '0.5'],
-  [undefined, EMPTY],
-  [null, EMPTY],
-  [true, 'true'],
-  [false, 'false'],
+const SharedContentTestCases = new DynamicContentTestGenerator([
+  ...LITERALS,
   [NaN, 'NaN'],
   [new Date(2000, 0, 1), String(new Date(2000, 0, 1)), 'a Date object'],
   [Infinity, 'Infinity'],
@@ -679,7 +755,7 @@ const SharedContentTestCases = new ContentTestGenerator([
   ['<b>Max</b><b>James</b>', '<b>Max</b><b>James</b>'],
 ]);
 
-let GlimmerContentTestCases = new ContentTestGenerator([
+let GlimmerContentTestCases = new DynamicContentTestGenerator([
   [Object.create(null), EMPTY, 'an object with no toString'],
 ]);
 
@@ -1058,7 +1134,7 @@ moduleFor(
     }
 
     ['@test can set dynamic href']() {
-      this.render('<a href={{model.url}}>Example</a>', {
+      this.render('<a href={{this.model.url}}>Example</a>', {
         model: {
           url: 'http://example.com',
         },
@@ -1160,7 +1236,7 @@ moduleFor(
     }
 
     ['@test unquoted class attribute can contain multiple classes']() {
-      this.render('<div class={{model.classes}}>hello</div>', {
+      this.render('<div class={{this.model.classes}}>hello</div>', {
         model: {
           classes: 'foo bar baz',
         },
@@ -1198,7 +1274,7 @@ moduleFor(
     }
 
     ['@test unquoted class attribute']() {
-      this.render('<div class={{model.foo}}>hello</div>', {
+      this.render('<div class={{this.model.foo}}>hello</div>', {
         model: {
           foo: 'foo',
         },
@@ -1236,7 +1312,7 @@ moduleFor(
     }
 
     ['@test quoted class attribute']() {
-      this.render('<div class="{{model.foo}}">hello</div>', {
+      this.render('<div class="{{this.model.foo}}">hello</div>', {
         model: {
           foo: 'foo',
         },
@@ -1274,7 +1350,7 @@ moduleFor(
     }
 
     ['@test quoted class attribute can contain multiple classes']() {
-      this.render('<div class="{{model.classes}}">hello</div>', {
+      this.render('<div class="{{this.model.classes}}">hello</div>', {
         model: {
           classes: 'foo bar baz',
         },
@@ -1312,13 +1388,16 @@ moduleFor(
     }
 
     ['@test class attribute concats bound values']() {
-      this.render('<div class="{{model.foo}} {{model.bar}} {{model.bizz}}">hello</div>', {
-        model: {
-          foo: 'foo',
-          bar: 'bar',
-          bizz: 'bizz',
-        },
-      });
+      this.render(
+        '<div class="{{this.model.foo}} {{this.model.bar}} {{this.model.bizz}}">hello</div>',
+        {
+          model: {
+            foo: 'foo',
+            bar: 'bar',
+            bizz: 'bizz',
+          },
+        }
+      );
 
       this.assertElement(this.firstChild, {
         tagName: 'div',
@@ -1367,7 +1446,7 @@ moduleFor(
 
     ['@test class attribute accepts nested helpers, and updates']() {
       this.render(
-        `<div class="{{if model.hasSize model.size}} {{if model.hasShape model.shape}}">hello</div>`,
+        `<div class="{{if this.model.hasSize this.model.size}} {{if this.model.hasShape this.model.shape}}">hello</div>`,
         {
           model: {
             size: 'large',
@@ -1426,7 +1505,7 @@ moduleFor(
 
     ['@test Multiple dynamic classes']() {
       this.render(
-        '<div class="{{model.foo}} {{model.bar}} {{model.fizz}} {{model.baz}}">hello</div>',
+        '<div class="{{this.model.foo}} {{this.model.bar}} {{this.model.fizz}} {{this.model.baz}}">hello</div>',
         {
           model: {
             foo: 'foo',
@@ -1479,7 +1558,7 @@ moduleFor(
     }
 
     ['@test classes are ordered: See issue #9912']() {
-      this.render('<div class="{{model.foo}}  static   {{model.bar}}">hello</div>', {
+      this.render('<div class="{{this.model.foo}}  static   {{this.model.bar}}">hello</div>', {
         model: {
           foo: 'foo',
           bar: 'bar',
@@ -1557,7 +1636,7 @@ moduleFor(
   'Inline style tests',
   class extends StyleTest {
     ['@test can set dynamic style']() {
-      this.render('<div style={{model.style}}></div>', {
+      this.render('<div style={{this.model.style}}></div>', {
         model: {
           style: htmlSafe('width: 60px;'),
         },
@@ -1604,7 +1683,7 @@ moduleFor(
   }
 );
 
-if (!EmberDev.runningProdBuild) {
+if (DEBUG) {
   moduleFor(
     'Inline style tests - warnings',
     class extends StyleTest {

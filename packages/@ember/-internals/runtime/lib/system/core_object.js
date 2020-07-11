@@ -3,21 +3,20 @@
 */
 
 import { FACTORY_FOR } from '@ember/-internals/container';
+import { getOwner } from '@ember/-internals/owner';
 import { assign, _WeakSet as WeakSet } from '@ember/polyfills';
 import {
   guidFor,
   getName,
   setName,
+  symbol,
   makeArray,
   HAS_NATIVE_PROXY,
   isInternalSymbol,
 } from '@ember/-internals/utils';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
-import { schedule } from '@ember/runloop';
-import { meta, peekMeta, deleteMeta } from '@ember/-internals/meta';
+import { meta } from '@ember/-internals/meta';
 import {
   PROXY_CONTENT,
-  finishChains,
   sendEvent,
   Mixin,
   activateObserver,
@@ -31,22 +30,28 @@ import {
 import ActionHandler from '../mixins/action_handler';
 import { assert } from '@ember/debug';
 import { DEBUG } from '@glimmer/env';
+import { destroy, isDestroying, isDestroyed, registerDestructor } from '@glimmer/runtime';
 
 const reopen = Mixin.prototype.reopen;
 
 const wasApplied = new WeakSet();
 
 const factoryMap = new WeakMap();
+let debugOwnerMap;
+
+if (DEBUG) {
+  debugOwnerMap = new WeakMap();
+}
 
 const prototypeMixinMap = new WeakMap();
 
-let PASSED_FROM_CREATE;
-let initCalled; // only used in debug builds to enable the proxy trap
+const initCalled = DEBUG ? new WeakSet() : undefined; // only used in debug builds to enable the proxy trap
+const PASSED_FROM_CREATE = DEBUG ? symbol('PASSED_FROM_CREATE') : undefined;
 
-// using DEBUG here to avoid the extraneous variable when not needed
-if (DEBUG) {
-  PASSED_FROM_CREATE = Symbol();
-  initCalled = new WeakSet();
+const FRAMEWORK_CLASSES = symbol('FRAMEWORK_CLASS');
+
+export function setFrameworkClass(klass) {
+  klass[FRAMEWORK_CLASSES] = true;
 }
 
 function initialize(obj, properties) {
@@ -96,9 +101,8 @@ function initialize(obj, properties) {
       let isDescriptor = possibleDesc !== undefined;
 
       if (!isDescriptor) {
-        let baseValue = obj[keyName];
-
         if (hasConcatenatedProps && concatenatedProperties.indexOf(keyName) > -1) {
+          let baseValue = obj[keyName];
           if (baseValue) {
             value = makeArray(baseValue).concat(value);
           } else {
@@ -107,6 +111,7 @@ function initialize(obj, properties) {
         }
 
         if (hasMergedProps && mergedProperties.indexOf(keyName) > -1) {
+          let baseValue = obj[keyName];
           value = assign({}, baseValue, value);
         }
       }
@@ -133,17 +138,12 @@ function initialize(obj, properties) {
 
   m.unsetInitializing();
 
-  if (EMBER_METAL_TRACKED_PROPERTIES) {
-    let observerEvents = m.observerEvents();
+  let observerEvents = m.observerEvents();
 
-    if (observerEvents !== undefined) {
-      for (let i = 0; i < observerEvents.length; i++) {
-        activateObserver(obj, observerEvents[i]);
-      }
+  if (observerEvents !== undefined) {
+    for (let i = 0; i < observerEvents.length; i++) {
+      activateObserver(obj, observerEvents[i].event, observerEvents[i].sync);
     }
-  } else {
-    // re-enable chains
-    finishChains(m);
   }
 
   sendEvent(obj, 'init', undefined, undefined, undefined, m);
@@ -215,7 +215,7 @@ class CoreObject {
     factoryMap.set(this, factory);
   }
 
-  constructor(properties) {
+  constructor(passedFromCreate) {
     // pluck off factory
     let initFactory = factoryMap.get(this.constructor);
     if (initFactory !== undefined) {
@@ -279,16 +279,24 @@ class CoreObject {
       FACTORY_FOR.set(self, initFactory);
     }
 
+    registerDestructor(self, () => self.willDestroy());
+
     // disable chains
     let m = meta(self);
 
     m.setInitializing();
 
     assert(
-      `An EmberObject based class, ${
-        this.constructor
-      }, was not instantiated correctly. You may have either used \`new\` instead of \`.create()\`, or not passed arguments to your call to super in the constructor: \`super(...arguments)\`. If you are trying to use \`new\`, consider using native classes without extending from EmberObject.`,
-      properties[PASSED_FROM_CREATE]
+      `An EmberObject based class, ${this.constructor}, was not instantiated correctly. You may have either used \`new\` instead of \`.create()\`, or not passed arguments to your call to super in the constructor: \`super(...arguments)\`. If you are trying to use \`new\`, consider using native classes without extending from EmberObject.`,
+      (() => {
+        let owner = debugOwnerMap.get(this.constructor);
+        debugOwnerMap.delete(this.constructor);
+
+        return (
+          passedFromCreate !== undefined &&
+          (passedFromCreate === PASSED_FROM_CREATE || passedFromCreate === owner)
+        );
+      })()
     );
 
     // only return when in debug builds and `self` is the proxy created above
@@ -324,9 +332,10 @@ class CoreObject {
     // alerts 'Name is Steve'.
     ```
 
-    NOTE: If you do override `init` for a framework class like `Ember.View`,
-    be sure to call `this._super(...arguments)` in your
-    `init` declaration! If you don't, Ember may not have an opportunity to
+    NOTE: If you do override `init` for a framework class like `Component`
+    from `@ember/component`, be sure to call `this._super(...arguments)`
+    in your `init` declaration!
+    If you don't, Ember may not have an opportunity to
     do important setup work, and you'll see strange behavior in your
     application.
 
@@ -344,7 +353,7 @@ class CoreObject {
     in the superclass. However, there are some cases where it is preferable
     to build up a property's value by combining the superclass' property
     value with the subclass' value. An example of this in use within Ember
-    is the `classNames` property of `Ember.View`.
+    is the `classNames` property of `Component` from `@ember/component`.
 
     Here is some sample code showing the difference between a concatenated
     property and a normal one:
@@ -495,7 +504,7 @@ class CoreObject {
     @public
   */
   get isDestroyed() {
-    return peekMeta(this).isSourceDestroyed();
+    return isDestroyed(this);
   }
 
   set isDestroyed(value) {
@@ -513,7 +522,7 @@ class CoreObject {
     @public
   */
   get isDestroying() {
-    return peekMeta(this).isSourceDestroying();
+    return isDestroying(this);
   }
 
   set isDestroying(value) {
@@ -535,16 +544,7 @@ class CoreObject {
     @public
   */
   destroy() {
-    let m = peekMeta(this);
-    if (m.isSourceDestroying()) {
-      return;
-    }
-
-    m.setSourceDestroying();
-
-    schedule('actions', this, this.willDestroy);
-    schedule('destroy', this, this._scheduledDestroy, m);
-
+    destroy(this);
     return this;
   }
 
@@ -555,21 +555,6 @@ class CoreObject {
     @public
   */
   willDestroy() {}
-
-  /**
-    Invoked by the run loop to actually destroy the object. This is
-    scheduled for execution by the `destroy` method.
-
-    @private
-    @method _scheduledDestroy
-  */
-  _scheduledDestroy(m) {
-    if (m.isSourceDestroyed()) {
-      return;
-    }
-    deleteMeta(this);
-    m.setSourceDestroyed();
-  }
 
   /**
     Returns a string representation which attempts to provide more information
@@ -764,7 +749,32 @@ class CoreObject {
   */
   static create(props, extra) {
     let C = this;
-    let instance = DEBUG ? new C(Object.freeze({ [PASSED_FROM_CREATE]: true })) : new C();
+    let instance;
+
+    if (this[FRAMEWORK_CLASSES]) {
+      let initFactory = factoryMap.get(this);
+      let owner;
+      if (initFactory !== undefined) {
+        owner = initFactory.owner;
+      } else if (props !== undefined) {
+        owner = getOwner(props);
+      }
+
+      if (DEBUG) {
+        if (owner === undefined) {
+          // fallback to passing the special PASSED_FROM_CREATE symbol
+          // to avoid an error when folks call things like Controller.extend().create()
+          // we should do a subsequent deprecation pass to ensure this isn't allowed
+          owner = PASSED_FROM_CREATE;
+        } else {
+          debugOwnerMap.set(this, owner);
+        }
+      }
+
+      instance = new C(owner);
+    } else {
+      instance = DEBUG ? new C(PASSED_FROM_CREATE) : new C();
+    }
 
     if (extra === undefined) {
       initialize(instance, props);

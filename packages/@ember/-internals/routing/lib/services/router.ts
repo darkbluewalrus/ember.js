@@ -1,10 +1,11 @@
 import { Evented } from '@ember/-internals/runtime';
 import { assert } from '@ember/debug';
 import { readOnly } from '@ember/object/computed';
+import { assign } from '@ember/polyfills';
 import Service from '@ember/service';
 import { DEBUG } from '@glimmer/env';
 import { Transition } from 'router_js';
-import EmberRouter from '../system/router';
+import EmberRouter, { QueryParam } from '../system/router';
 import { extractRouteArgs, resemblesURL, shallowEqual } from '../utils';
 
 let freezeRouteInfo: Function;
@@ -37,19 +38,20 @@ function cleanURL(url: string, rootURL: string) {
 
    In this example, the Router service is injected into a component to initiate a transition
    to a dedicated route:
-   ```javascript
-   import Component from '@ember/component';
+
+   ```app/components/example.js
+   import Component from '@glimmer/component';
+   import { action } from '@ember/object';
    import { inject as service } from '@ember/service';
 
-   export default Component.extend({
-     router: service(),
+   export default class ExampleComponent extends Component {
+     @service router;
 
-     actions: {
-       next() {
-         this.get('router').transitionTo('other.route');
-       }
+     @action
+     next() {
+       this.router.transitionTo('other.route');
      }
-   });
+   }
    ```
 
    Like any service, it can also be injected into helpers, routes, etc.
@@ -84,25 +86,54 @@ export default class RouterService extends Service {
      Transition the application into another route. The route may
      be either a single route or route path:
 
-     See [transitionTo](/api/ember/release/classes/Route/methods/transitionTo?anchor=transitionTo) for more info.
+     See [transitionTo](/ember/release/classes/Route/methods/transitionTo?anchor=transitionTo) for more info.
 
      Calling `transitionTo` from the Router service will cause default query parameter values to be included in the URL.
      This behavior is different from calling `transitionTo` on a route or `transitionToRoute` on a controller.
      See the [Router Service RFC](https://github.com/emberjs/rfcs/blob/master/text/0095-router-service.md#query-parameter-semantics) for more info.
 
+     In the following example we use the Router service to navigate to a route with a
+     specific model from a Component in the first action, and in the second we trigger
+     a query-params only transition.
+
+     ```app/components/example.js
+     import Component from '@glimmer/component';
+     import { action } from '@ember/object';
+     import { inject as service } from '@ember/service';
+
+     export default class extends Component {
+       @service router;
+
+       @action
+       goToComments(post) {
+         this.router.transitionTo('comments', post);
+       }
+
+       @action
+       fetchMoreComments(latestComment) {
+         this.router.transitionTo({
+           queryParams: { commentsAfter: latestComment }
+         });
+       }
+     }
+     ```
+
      @method transitionTo
-     @param {String} routeNameOrUrl the name of the route or a URL
-     @param {...Object} models the model(s) or identifier(s) to be used while
+     @param {String} [routeNameOrUrl] the name of the route or a URL
+     @param {...Object} [models] the model(s) or identifier(s) to be used while
        transitioning to the route.
      @param {Object} [options] optional hash with a queryParams property
-       containing a mapping of query parameters
+       containing a mapping of query parameters. May be supplied as the only
+      parameter to trigger a query-parameter-only transition.
      @return {Transition} the transition object associated with this
        attempted transition
      @public
    */
-  transitionTo(...args: string[]) {
+  transitionTo(...args: (string | object)[]) {
     if (resemblesURL(args[0])) {
-      return this._router._doURLTransition('transitionTo', args[0]);
+      // NOTE: this `args[0] as string` cast is safe and TS correctly infers it
+      // in 3.6+, so it can be removed when TS is upgraded.
+      return this._router._doURLTransition('transitionTo', args[0] as string);
     }
 
     let { routeName, models, queryParams } = extractRouteArgs(args);
@@ -114,19 +145,36 @@ export default class RouterService extends Service {
   }
 
   /**
-     Transition into another route while replacing the current URL, if possible.
-     The route may be either a single route or route path:
+     Similar to `transitionTo`, but instead of adding the destination to the browser's URL history,
+     it replaces the entry for the current route.
+     When the user clicks the "back" button in the browser, there will be fewer steps.
+     This is most commonly used to manage redirects in a way that does not cause confusing additions
+     to the user's browsing history.
 
-     See [replaceWith](/api/ember/release/classes/Route/methods/replaceWith?anchor=replaceWith) for more info.
+     See [replaceWith](/ember/release/classes/Route/methods/replaceWith?anchor=replaceWith) for more info.
 
      Calling `replaceWith` from the Router service will cause default query parameter values to be included in the URL.
      This behavior is different from calling `replaceWith` on a route.
      See the [Router Service RFC](https://github.com/emberjs/rfcs/blob/master/text/0095-router-service.md#query-parameter-semantics) for more info.
 
+     Usage example:
+
+     ```app/routes/application.js
+     import Route from '@ember/routing/route';
+
+     export default class extends Route {
+       beforeModel() {
+         if (!authorized()){
+           this.replaceWith('unauthorized');
+         }
+       }
+     });
+     ```
+
      @method replaceWith
-     @param {String} routeNameOrUrl the name of the route or a URL
+     @param {String} routeNameOrUrl the name of the route or a URL of the desired destination
      @param {...Object} models the model(s) or identifier(s) to be used while
-       transitioning to the route.
+       transitioning to the route i.e. an object of params to pass to the destination route
      @param {Object} [options] optional hash with a queryParams property
        containing a mapping of query parameters
      @return {Transition} the transition object associated with this
@@ -144,43 +192,47 @@ export default class RouterService extends Service {
     In this example, the URL for the `author.books` route for a given author
     is copied to the clipboard.
 
+    ```app/templates/application.hbs
+    <CopyLink @author={{hash id="tomster" name="Tomster"}} />
+    ```
+
     ```app/components/copy-link.js
-    import Component from '@ember/component';
-    import {inject as service} from '@ember/service';
+    import Component from '@glimmer/component';
+    import { inject as service } from '@ember/service';
+    import { action } from '@ember/object';
 
-    export default Component.extend({
-      router: service('router'),
-      clipboard: service('clipboard')
+    export default class CopyLinkComponent extends Component {
+      @service router;
+      @service clipboard;
 
-      // Provided in the template
-      // { id: 'tomster', name: 'Tomster' }
-      author: null,
-
+      @action
       copyBooksURL() {
         if (this.author) {
-          const url = this.router.urlFor('author.books', this.author);
+          const url = this.router.urlFor('author.books', this.args.author);
           this.clipboard.set(url);
           // Clipboard now has /author/tomster/books
         }
       }
-    });
+    }
     ```
 
     Just like with `transitionTo` and `replaceWith`, `urlFor` can also handle
     query parameters.
 
+    ```app/templates/application.hbs
+    <CopyLink @author={{hash id="tomster" name="Tomster"}} />
+    ```
+
     ```app/components/copy-link.js
-    import Component from '@ember/component';
-    import {inject as service} from '@ember/service';
+    import Component from '@glimmer/component';
+    import { inject as service } from '@ember/service';
+    import { action } from '@ember/object';
 
-    export default Component.extend({
-      router: service('router'),
-      clipboard: service('clipboard')
+    export default class CopyLinkComponent extends Component {
+      @service router;
+      @service clipboard;
 
-      // Provided in the template
-      // { id: 'tomster', name: 'Tomster' }
-      author: null,
-
+      @action
       copyOnlyEmberBooksURL() {
         if (this.author) {
           const url = this.router.urlFor('author.books', this.author, {
@@ -190,7 +242,7 @@ export default class RouterService extends Service {
           // Clipboard now has /author/tomster/books?filter=emberjs
         }
       }
-    });
+    }
     ```
 
      @method urlFor
@@ -207,12 +259,47 @@ export default class RouterService extends Service {
   }
 
   /**
-     Determines whether a route is active.
+     Returns `true` if `routeName/models/queryParams` is the active route, where `models` and `queryParams` are optional.
+     See [model](api/ember/release/classes/Route/methods/model?anchor=model) and
+     [queryParams](/api/ember/3.7/classes/Route/properties/queryParams?anchor=queryParams) for more information about these arguments.
+
+     In the following example, `isActive` will return `true` if the current route is `/posts`.
+
+     ```app/components/posts.js
+     import Component from '@glimmer/component';
+     import { inject as service } from '@ember/service';
+
+     export default class extends Component {
+       @service router;
+
+       displayComments() {
+         return this.get('router').isActive('posts');
+       }
+     });
+     ```
+
+     The next example includes a dynamic segment, and will return `true` if the current route is `/posts/1`,
+     assuming the post has an id of 1:
+
+     ```app/components/posts.js
+     import Component from '@glimmer/component';
+     import { inject as service } from '@ember/service';
+
+     export default class extends Component {
+       @service router;
+
+       displayComments(post) {
+         return this.get('router').isActive('posts', post.id);
+       }
+     });
+     ```
+
+     Where `post.id` is the id of a specific post, which is represented in the route as /posts/[post.id].
+     If `post.id` is equal to 1, then isActive will return true if the current route is /posts/1, and false if the route is anything else.
 
      @method isActive
      @param {String} routeName the name of the route
-     @param {...Object} models the model(s) or identifier(s) to be used while
-       transitioning to the route.
+     @param {...Object} models the model(s) or identifier(s) to be used when determining the active route.
      @param {Object} [options] optional hash with a queryParams property
        containing a mapping of query parameters
      @return {boolean} true if the provided routeName/models/queryParams are active
@@ -222,18 +309,34 @@ export default class RouterService extends Service {
     let { routeName, models, queryParams } = extractRouteArgs(args);
     let routerMicrolib = this._router._routerMicrolib;
 
-    if (!routerMicrolib.isActiveIntent(routeName, models)) {
+    // UNSAFE: casting `routeName as string` here encodes the existing
+    // assumption but may be wrong: `extractRouteArgs` correctly returns it as
+    // `string | undefined`. There may be bugs if `isActiveIntent` does
+    // not correctly account for `undefined` values for `routeName`. Spoilers:
+    // it *does not* account for this being `undefined`.
+    if (!routerMicrolib.isActiveIntent(routeName as string, models)) {
       return false;
     }
     let hasQueryParams = Object.keys(queryParams).length > 0;
 
     if (hasQueryParams) {
+      queryParams = assign({}, queryParams);
       this._router._prepareQueryParams(
-        routeName,
+        // UNSAFE: casting `routeName as string` here encodes the existing
+        // assumption but may be wrong: `extractRouteArgs` correctly returns it
+        // as `string | undefined`. There may be bugs if `_prepareQueryParams`
+        // does not correctly account for `undefined` values for `routeName`.
+        //  Spoilers: under the hood this currently uses router.js APIs which
+        // *do not* account for this being `undefined`.
+        routeName as string,
         models,
-        queryParams,
+        // UNSAFE: downstream consumers treat this as `QueryParam`, which the
+        // type system here *correctly* reports as incorrect, because it may be
+        // just an empty object.
+        queryParams as QueryParam,
         true /* fromRouterService */
       );
+
       return shallowEqual(queryParams, routerMicrolib.state!.queryParams);
     }
 
@@ -244,6 +347,27 @@ export default class RouterService extends Service {
      Takes a string URL and returns a `RouteInfo` for the leafmost route represented
      by the URL. Returns `null` if the URL is not recognized. This method expects to
      receive the actual URL as seen by the browser including the app's `rootURL`.
+
+     See [RouteInfo](/ember/release/classes/RouteInfo) for more info.
+
+     In the following example `recognize` is used to verify if a path belongs to our
+     application before transitioning to it.
+
+     ```
+     import Component from '@ember/component';
+     import { inject as service } from '@ember/service';
+
+     export default class extends Component {
+       @service router;
+       path = '/';
+
+       click() {
+         if (this.router.recognize(this.path)) {
+           this.router.transitionTo(this.path);
+         }
+       }
+     }
+     ```
 
       @method recognize
       @param {String} url
@@ -288,12 +412,16 @@ export default class RouterService extends Service {
     half-filled out:
 
     ```app/routes/contact-form.js
-    import {inject as service} from '@ember/service';
+    import Route from '@ember/routing';
+    import { action } from '@ember/object';
+    import { inject as service } from '@ember/service';
 
-    export default Route.extend({
-      router: service('router'),
-      init() {
-        this._super(...arguments);
+    export default class extends Route {
+      @service router;
+
+      constructor() {
+        super(...arguments);
+
         this.router.on('routeWillChange', (transition) => {
           if (!transition.to.find(route => route.name === this.routeName)) {
             alert("Please save or cancel your changes.");
@@ -301,7 +429,7 @@ export default class RouterService extends Service {
           }
         })
       }
-    });
+    }
     ```
 
     The `routeWillChange` event fires whenever a new route is chosen as the desired target of a transition. This includes `transitionTo`, `replaceWith`, all redirection for any reason including error handling, and abort. Aborting implies changing the desired target back to where you already were. Once a transition has completed, `routeDidChange` fires.
@@ -319,12 +447,16 @@ export default class RouterService extends Service {
     A good example is sending some analytics when the route has transitioned:
 
     ```app/routes/contact-form.js
-    import {inject as service} from '@ember/service';
+    import Route from '@ember/routing';
+    import { action } from '@ember/object';
+    import { inject as service } from '@ember/service';
 
-    export default Route.extend({
-      router: service('router'),
-      init() {
-        this._super(...arguments);
+    export default class extends Route {
+      @service router;
+
+      constructor() {
+        super(...arguments);
+
         this.router.on('routeDidChange', (transition) => {
           ga.send('pageView', {
             current: transition.to.name,
@@ -332,8 +464,18 @@ export default class RouterService extends Service {
           });
         })
       }
-    });
+    }
     ```
+
+    `routeDidChange` will be called after any `Route`'s
+    [didTransition](/ember/release/classes/Route/events/didTransition?anchor=didTransition)
+    action has been fired.
+    The updates of properties
+    [currentURL](/ember/release/classes/RouterService/properties/currentURL?anchor=currentURL),
+    [currentRouteName](/ember/release/classes/RouterService/properties/currentURL?anchor=currentRouteName)
+    and
+    [currentRoute](/ember/release/classes/RouterService/properties/currentURL?anchor=currentRoute)
+    are completed at the time `routeDidChange` is called.
 
     @event routeDidChange
     @param {Transition} transition
@@ -400,18 +542,14 @@ RouterService.reopen(Evented, {
   currentURL: readOnly('_router.currentURL'),
 
   /**
-    The `location` property determines the type of URLs your
-    application will use.
+    The `location` property returns what implementation of the `location` API
+    your application is using, which determines what type of URL is being used.
 
-    The following location types are currently available:
-    * `auto`
-    * `hash`
-    * `history`
-    * `none`
+    See [Location](/ember/release/classes/Location) for more information.
 
-    You can pass a location type to force a particular `location` API
-    implementation to be used in your application. For example, to set
-    the `history` type:
+    To force a particular `location` API implementation to be used in your
+    application you can set a location type on your `config/environment`.
+    For example, to set the `history` type:
 
     ```config/environment.js
     'use strict';
@@ -427,6 +565,14 @@ RouterService.reopen(Evented, {
     }
     ```
 
+    The following location types are available by default:
+    `auto`, `hash`, `history`, `none`.
+
+    See [HashLocation](/ember/release/classes/HashLocation).
+    See [HistoryLocation](/ember/release/classes/HistoryLocation).
+    See [NoneLocation](/ember/release/classes/NoneLocation).
+    See [AutoLocation](/ember/release/classes/AutoLocation).
+
     @property location
     @default 'hash'
     @see {Location}
@@ -439,7 +585,7 @@ RouterService.reopen(Evented, {
     the application, '/' by default.
     This prefix is assumed on all routes defined on this app.
 
-    IF you change the `rootURL` in your environment configuration
+    If you change the `rootURL` in your environment configuration
     like so:
 
     ```config/environment.js
@@ -464,10 +610,28 @@ RouterService.reopen(Evented, {
   rootURL: readOnly('_router.rootURL'),
 
   /**
-     A `RouteInfo` that represents the current leaf route.
-     It is guaranteed to change whenever a route transition
-     happens (even when that transition only changes parameters
-     and doesn't change the active route)
+    The `currentRoute` property contains metadata about the current leaf route.
+    It returns a `RouteInfo` object that has information like the route name,
+    params, query params and more.
+
+    See [RouteInfo](/ember/release/classes/RouteInfo) for more info.
+
+    This property is guaranteed to change whenever a route transition
+    happens (even when that transition only changes parameters
+    and doesn't change the active route).
+
+    Usage example:
+    ```app/components/header.js
+      import Component from '@glimmer/component';
+      import { inject as service } from '@ember/service';
+      import { notEmpty } from '@ember/object/computed';
+
+      export default class extends Component {
+        @service router;
+
+        @notEmpty('router.currentRoute.child') isChildRoute;
+      });
+    ```
 
      @property currentRoute
      @type RouteInfo

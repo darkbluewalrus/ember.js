@@ -1,6 +1,7 @@
 import { OWNER } from '@ember/-internals/owner';
 import { assign } from '@ember/polyfills';
 import { EMBER_MODULE_UNIFICATION } from '@ember/canary-features';
+import Service from '@ember/service';
 import { DEBUG } from '@glimmer/env';
 import { Registry } from '..';
 import { factory, moduleFor, AbstractTestCase, runTask } from 'internal-test-helpers';
@@ -197,7 +198,7 @@ moduleFor(
 
       assert.throws(() => {
         container.lookup('controller:foo');
-      }, /Failed to create an instance of \'controller:foo\'/);
+      }, /Failed to create an instance of 'controller:foo'/);
     }
 
     ['@test Injecting a failed lookup raises an error']() {
@@ -501,6 +502,18 @@ moduleFor(
       assert.equal(result[OWNER], owner, 'owner is properly included');
     }
 
+    ['@test ownerInjection should be usable to create a service for testing'](assert) {
+      assert.expect(0);
+
+      let owner = {};
+      let registry = new Registry();
+      let container = registry.container({ owner });
+
+      let result = container.ownerInjection();
+
+      Service.create(result);
+    }
+
     ['@test lookup passes options through to expandlocallookup'](assert) {
       let registry = new Registry();
       let container = registry.container();
@@ -680,9 +693,9 @@ moduleFor(
     [`@test assert when calling lookup after destroy on a container`](assert) {
       let registry = new Registry();
       let container = registry.container();
-      let Component = factory();
-      registry.register('component:foo-bar', Component);
-      let instance = container.lookup('component:foo-bar');
+      registry.register('service:foo', factory());
+
+      let instance = container.lookup('service:foo');
       assert.ok(instance, 'precond lookup successful');
 
       runTask(() => {
@@ -690,17 +703,17 @@ moduleFor(
         container.finalizeDestroy();
       });
 
-      expectAssertion(() => {
-        container.lookup('component:foo-bar');
-      });
+      assert.throws(() => {
+        container.lookup('service:foo');
+      }, /Can not call `.lookup` after the owner has been destroyed/);
     }
 
     [`@test assert when calling factoryFor after destroy on a container`](assert) {
       let registry = new Registry();
       let container = registry.container();
-      let Component = factory();
-      registry.register('component:foo-bar', Component);
-      let instance = container.factoryFor('component:foo-bar');
+      registry.register('service:foo', factory());
+
+      let instance = container.lookup('service:foo');
       assert.ok(instance, 'precond lookup successful');
 
       runTask(() => {
@@ -708,9 +721,9 @@ moduleFor(
         container.finalizeDestroy();
       });
 
-      expectAssertion(() => {
-        container.factoryFor('component:foo-bar');
-      });
+      assert.throws(() => {
+        container.factoryFor('service:foo');
+      }, /Can not call `.factoryFor` after the owner has been destroyed/);
     }
 
     // this is skipped until templates and the glimmer environment do not require `OWNER` to be
@@ -734,6 +747,47 @@ moduleFor(
       // note: _guid and isDestroyed are being set in the `factory` constructor
       // not via registry/container shenanigans
       assert.deepEqual(Object.keys(instance), []);
+    }
+
+    '@test instantiating via container.lookup during destruction enqueues destruction'(assert) {
+      let registry = new Registry();
+      let container = registry.container();
+      let otherInstance;
+      class Service extends factory() {
+        destroy() {
+          otherInstance = container.lookup('service:other');
+
+          assert.ok(otherInstance.isDestroyed, 'service:other was destroyed');
+        }
+      }
+      registry.register('service:foo', Service);
+      registry.register('service:other', factory());
+      let instance = container.lookup('service:foo');
+      assert.ok(instance, 'precond lookup successful');
+
+      runTask(() => {
+        container.destroy();
+        container.finalizeDestroy();
+      });
+    }
+
+    '@test instantiating via container.factoryFor().create() after destruction throws an error'(
+      assert
+    ) {
+      let registry = new Registry();
+      let container = registry.container();
+      registry.register('service:foo', factory());
+      registry.register('service:other', factory());
+      let Factory = container.factoryFor('service:other');
+
+      runTask(() => {
+        container.destroy();
+        container.finalizeDestroy();
+      });
+
+      assert.throws(() => {
+        Factory.create();
+      }, /Can not create new instances after the owner has been destroyed \(you attempted to create service:other\)/);
     }
   }
 );

@@ -21,7 +21,7 @@ module.exports = {
     'no-new-wrappers': 'error',
     'no-unused-vars': 'error',
     'no-throw-literal': 'error',
-    'no-useless-escape': 'off', // TODO: bring this back
+    'no-var': 'error',
     'prettier/prettier': 'error',
     'qunit/no-commented-tests': 'off',
     'qunit/require-expect': 'off',
@@ -38,7 +38,7 @@ module.exports = {
       'node-module',
     ],
     'import/parsers': {
-      'typescript-eslint-parser': ['.ts'],
+      '@typescript-eslint/parser': ['.ts'],
     },
     'import/resolver': {
       node: {
@@ -54,7 +54,7 @@ module.exports = {
     {
       files: [ '**/*.ts' ],
 
-      parser: 'typescript-eslint-parser',
+      parser: '@typescript-eslint/parser',
 
       parserOptions: {
         sourceType: 'module',
@@ -63,6 +63,7 @@ module.exports = {
       rules: {
         // the TypeScript compiler already takes care of this and
         // leaving it enabled results in false positives for interface imports
+        'no-dupe-class-members': 'off',
         'no-unused-vars': 'off',
         'no-undef': 'off',
 

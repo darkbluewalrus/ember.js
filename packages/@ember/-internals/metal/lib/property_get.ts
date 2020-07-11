@@ -1,14 +1,16 @@
 /**
 @module @ember/object
 */
-import { HAS_NATIVE_PROXY, isEmberArray, symbol } from '@ember/-internals/utils';
-import { EMBER_METAL_TRACKED_PROPERTIES } from '@ember/canary-features';
-import { assert } from '@ember/debug';
+import { HAS_NATIVE_PROXY, isEmberArray, isProxy, symbol } from '@ember/-internals/utils';
+import { assert, deprecate } from '@ember/debug';
 import { DEBUG } from '@glimmer/env';
-import { descriptorForProperty } from './descriptor_map';
+import {
+  consumeTag,
+  deprecateMutationsInAutotrackingTransaction,
+  isTracking,
+} from '@glimmer/validator';
 import { isPath } from './path_cache';
 import { tagForProperty } from './tags';
-import { consume, isTracking } from './tracked';
 
 export const PROXY_CONTENT = symbol('PROXY_CONTENT');
 
@@ -103,33 +105,10 @@ export function get(obj: object, keyName: string): any {
   let value: any;
 
   if (isObjectLike) {
-    let tracking = isTracking();
-
-    if (EMBER_METAL_TRACKED_PROPERTIES) {
-      if (tracking) {
-        consume(tagForProperty(obj, keyName));
-      }
-    }
-
-    let descriptor = descriptorForProperty(obj, keyName);
-    if (descriptor !== undefined) {
-      return descriptor.get(obj, keyName);
-    }
-
     if (DEBUG && HAS_NATIVE_PROXY) {
       value = getPossibleMandatoryProxyValue(obj, keyName);
     } else {
       value = obj[keyName];
-    }
-
-    // Add the tag of the returned value if it is an array, since arrays
-    // should always cause updates if they are consumed and then changed
-    if (
-      EMBER_METAL_TRACKED_PROPERTIES &&
-      tracking &&
-      (Array.isArray(value) || isEmberArray(value))
-    ) {
-      consume(tagForProperty(value, '[]'));
     }
   } else {
     value = obj[keyName];
@@ -141,9 +120,32 @@ export function get(obj: object, keyName: string): any {
       !(keyName in obj) &&
       typeof (obj as MaybeHasUnknownProperty).unknownProperty === 'function'
     ) {
-      return (obj as MaybeHasUnknownProperty).unknownProperty!(keyName);
+      if (DEBUG) {
+        deprecateMutationsInAutotrackingTransaction!(() => {
+          value = (obj as MaybeHasUnknownProperty).unknownProperty!(keyName);
+        });
+      } else {
+        value = (obj as MaybeHasUnknownProperty).unknownProperty!(keyName);
+      }
     }
   }
+
+  if (isObjectLike && isTracking()) {
+    consumeTag(tagForProperty(obj, keyName));
+
+    // Add the tag of the returned value if it is an array, since arrays
+    // should always cause updates if they are consumed and then changed
+    if (Array.isArray(value) || isEmberArray(value)) {
+      consumeTag(tagForProperty(value, '[]'));
+    }
+
+    // Add the value of the content if the value is a proxy. This is because
+    // content changes the truthiness/falsiness of the proxy.
+    if (isProxy(value)) {
+      consumeTag(tagForProperty(value, 'content'));
+    }
+  }
+
   return value;
 }
 
@@ -179,12 +181,23 @@ export function _getPath<T extends object>(root: T, path: string | string[]): an
   @param {Object} defaultValue The value to return if the property value is undefined
   @return {Object} The property value or the defaultValue.
   @public
+  @deprecated
 */
 export function getWithDefault<T extends object, K extends Extract<keyof T, string>>(
   root: T,
   key: K,
   defaultValue: T[K]
 ): T[K] {
+  deprecate(
+    'Using getWithDefault has been deprecated. Instead, consider using Ember get and explicitly checking for undefined.',
+    false,
+    {
+      id: 'ember-metal.get-with-default',
+      until: '4.0.0',
+      url: 'https://deprecations.emberjs.com/v3.x#toc_ember-metal-get-with-default',
+    }
+  );
+
   let value = get(root, key);
 
   if (value === undefined) {

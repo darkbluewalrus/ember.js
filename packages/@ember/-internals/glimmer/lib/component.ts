@@ -1,6 +1,6 @@
 import { get, PROPERTY_DID_CHANGE } from '@ember/-internals/metal';
 import { getOwner } from '@ember/-internals/owner';
-import { TargetActionSupport } from '@ember/-internals/runtime';
+import { setFrameworkClass, TargetActionSupport } from '@ember/-internals/runtime';
 import { symbol } from '@ember/-internals/utils';
 import {
   ActionSupport,
@@ -11,16 +11,15 @@ import {
   ViewMixin,
   ViewStateSupport,
 } from '@ember/-internals/views';
-import { assert } from '@ember/debug';
+import { assert, deprecate } from '@ember/debug';
 import { DEBUG } from '@glimmer/env';
-import { DirtyableTag } from '@glimmer/reference';
-import { normalizeProperty, SVG_NAMESPACE } from '@glimmer/runtime';
-
-import { RootReference, UPDATE } from './utils/references';
+import { UPDATE_REFERENCED_VALUE } from '@glimmer/reference';
+import { normalizeProperty } from '@glimmer/runtime';
+import { createTag, dirtyTag } from '@glimmer/validator';
+import { Namespace } from '@simple-dom/interface';
 
 export const DIRTY_TAG = symbol('DIRTY_TAG');
 export const ARGS = symbol('ARGS');
-export const ROOT_REF = symbol('ROOT_REF');
 export const IS_DISPATCHING_ATTRS = symbol('IS_DISPATCHING_ATTRS');
 export const HAS_BLOCK = symbol('HAS_BLOCK');
 export const BOUNDS = symbol('BOUNDS');
@@ -135,7 +134,7 @@ export const BOUNDS = symbol('BOUNDS');
       if (title) {
         return `${title} ${lastName}`;
       } else {
-        return `${firstName} ${lastName};
+        return `${firstName} ${lastName}`;
       }
     })
   });
@@ -371,7 +370,7 @@ export const BOUNDS = symbol('BOUNDS');
   will be removed.
 
   Both `classNames` and `classNameBindings` are concatenated properties. See
-  [EmberObject](/api/ember/release/classes/EmberObject) documentation for more
+  [EmberObject](/ember/release/classes/EmberObject) documentation for more
   information about concatenated properties.
 
   ### Other HTML Attributes
@@ -513,7 +512,7 @@ export const BOUNDS = symbol('BOUNDS');
   update of the  HTML attribute in the component's HTML output.
 
   `attributeBindings` is a concatenated property. See
-  [EmberObject](/api/ember/release/classes/EmberObject) documentation for more
+  [EmberObject](/ember/release/classes/EmberObject) documentation for more
   information about concatenated properties.
 
   ## Layouts
@@ -576,10 +575,10 @@ export const BOUNDS = symbol('BOUNDS');
   actions with angle bracket invocation, adding event handler methods to the
   component's class, or adding actions to the component's template.
 
-  ### Passing Actions With Angle Bracket Invoation
+  ### Passing Actions With Angle Bracket Invocation
 
   For one-off events specific to particular instance of a component, it is possible
-  to pass actions to the component's element using angle bracket invoation syntax.
+  to pass actions to the component's element using angle bracket invocation syntax.
 
   ```handlebars
   <MyWidget {{action 'firstWidgetClicked'}} />
@@ -597,7 +596,7 @@ export const BOUNDS = symbol('BOUNDS');
   ### Event Handler Methods
 
   Components can also respond to user-initiated events by implementing a method
-  that matches the event name. This approach is appropiate when the same event
+  that matches the event name. This approach is appropriate when the same event
   should be handled by all instances of the same component.
 
   An event object will be passed as the argument to the event handler method.
@@ -641,11 +640,8 @@ export const BOUNDS = symbol('BOUNDS');
   * `contextMenu`
   * `click`
   * `doubleClick`
-  * `mouseMove`
   * `focusIn`
   * `focusOut`
-  * `mouseEnter`
-  * `mouseLeave`
 
   Form events:
 
@@ -700,7 +696,7 @@ export const BOUNDS = symbol('BOUNDS');
   When the user clicks the button, Ember will invoke the `hello` action,
   passing in the current value of `@person.name` as an argument.
 
-  See [Ember.Templates.helpers.action](/api/ember/release/classes/Ember.Templates.helpers/methods/action?anchor=action).
+  See [Ember.Templates.helpers.action](/ember/release/classes/Ember.Templates.helpers/methods/action?anchor=action).
 
   @class Component
   @extends Ember.CoreView
@@ -724,8 +720,7 @@ const Component = CoreView.extend(
     init() {
       this._super(...arguments);
       this[IS_DISPATCHING_ATTRS] = false;
-      this[DIRTY_TAG] = DirtyableTag.create();
-      this[ROOT_REF] = new RootReference(this);
+      this[DIRTY_TAG] = createTag();
       this[BOUNDS] = null;
 
       if (DEBUG && this.renderer._destinedForDOM && this.tagName === '') {
@@ -748,14 +743,42 @@ const Component = CoreView.extend(
           !eventNames.length
         );
       }
+
+      deprecate(
+        `${this}: Using \`mouseEnter\` event handler methods in components has been deprecated.`,
+        this.mouseEnter === undefined,
+        {
+          id: 'ember-views.event-dispatcher.mouseenter-leave-move',
+          until: '4.0.0',
+          url: 'https://emberjs.com/deprecations/v3.x#toc_component-mouseenter-leave-move',
+        }
+      );
+      deprecate(
+        `${this}: Using \`mouseLeave\` event handler methods in components has been deprecated.`,
+        this.mouseLeave === undefined,
+        {
+          id: 'ember-views.event-dispatcher.mouseenter-leave-move',
+          until: '4.0.0',
+          url: 'https://emberjs.com/deprecations/v3.x#toc_component-mouseenter-leave-move',
+        }
+      );
+      deprecate(
+        `${this}: Using \`mouseMove\` event handler methods in components has been deprecated.`,
+        this.mouseMove === undefined,
+        {
+          id: 'ember-views.event-dispatcher.mouseenter-leave-move',
+          until: '4.0.0',
+          url: 'https://emberjs.com/deprecations/v3.x#toc_component-mouseenter-leave-move',
+        }
+      );
     },
 
     rerender() {
-      this[DIRTY_TAG].inner.dirty();
+      dirtyTag(this[DIRTY_TAG]);
       this._super();
     },
 
-    [PROPERTY_DID_CHANGE](key: string) {
+    [PROPERTY_DID_CHANGE](key: string, value?: unknown) {
       if (this[IS_DISPATCHING_ATTRS]) {
         return;
       }
@@ -763,8 +786,8 @@ const Component = CoreView.extend(
       let args = this[ARGS];
       let reference = args !== undefined ? args[key] : undefined;
 
-      if (reference !== undefined && reference[UPDATE] !== undefined) {
-        reference[UPDATE](get(this, key));
+      if (reference !== undefined && reference[UPDATE_REFERENCED_VALUE] !== undefined) {
+        reference[UPDATE_REFERENCED_VALUE](arguments.length === 2 ? value : get(this, key));
       }
     },
 
@@ -814,7 +837,7 @@ const Component = CoreView.extend(
       );
 
       let element = _element!;
-      let isSVG = element.namespaceURI === SVG_NAMESPACE;
+      let isSVG = element.namespaceURI === Namespace.SVG;
       let { type, normalized } = normalizeProperty(element, name);
 
       if (isSVG || type === 'attr') {
@@ -1027,8 +1050,13 @@ const Component = CoreView.extend(
       Returns a jQuery object for this component's element. If you pass in a selector
       string, this method will return a jQuery object, using the current element
       as its buffer.
+
       For example, calling `component.$('li')` will return a jQuery object containing
       all of the `li` elements inside the DOM element of this component.
+
+      Please note that jQuery integration is off by default and this feature will
+      not work properly. To enable this feature, you can read the instructions in
+      the [jquery-integration optional feature guide](https://guides.emberjs.com/release/configuring-ember/optional-features/#toc_jquery-integration).
       @method $
       @param {String} [selector] a jQuery-compatible selector string
       @return {jQuery} the jQuery object for the DOM node
@@ -1074,6 +1102,7 @@ const Component = CoreView.extend(
      @property isVisible
      @type Boolean
      @default null
+     @deprecated Use `<div hidden={{this.isHidden}}>` or `{{#if this.showComponent}} <MyComponent /> {{/if}}`
      @public
      */
   }
@@ -1085,5 +1114,7 @@ Component.reopenClass({
   isComponentFactory: true,
   positionalParams: [],
 });
+
+setFrameworkClass(Component);
 
 export default Component;

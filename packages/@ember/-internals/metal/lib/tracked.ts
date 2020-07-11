@@ -1,48 +1,10 @@
-import { HAS_NATIVE_SYMBOL, isEmberArray, symbol as emberSymbol } from '@ember/-internals/utils';
-import { EMBER_NATIVE_DECORATOR_SUPPORT } from '@ember/canary-features';
+import { isEmberArray } from '@ember/-internals/utils';
 import { assert } from '@ember/debug';
 import { DEBUG } from '@glimmer/env';
-import { combine, CONSTANT_TAG, Tag } from '@glimmer/reference';
+import { consumeTag, dirtyTagFor, trackedData } from '@glimmer/validator';
 import { Decorator, DecoratorPropertyDescriptor, isElementDescriptor } from './decorator';
 import { setClassicDecorator } from './descriptor_map';
-import { markObjectAsDirty, tagForProperty, update } from './tags';
-
-type Option<T> = T | null;
-
-// For some reason TS can't infer that these two functions are compatible-ish,
-// so we need to corece the type
-let symbol = (HAS_NATIVE_SYMBOL ? Symbol : emberSymbol) as (debugKey: string) => string;
-
-/**
-  An object that that tracks @tracked properties that were consumed.
-
-  @private
-*/
-export class Tracker {
-  private tags = new Set<Tag>();
-  private last: Option<Tag> = null;
-
-  add(tag: Tag): void {
-    this.tags.add(tag);
-    this.last = tag;
-  }
-
-  get size(): number {
-    return this.tags.size;
-  }
-
-  combine(): Tag {
-    if (this.tags.size === 0) {
-      return CONSTANT_TAG;
-    } else if (this.tags.size === 1) {
-      return this.last as Tag;
-    } else {
-      let tags: Tag[] = [];
-      this.tags.forEach(tag => tags.push(tag));
-      return combine(tags);
-    }
-  }
-}
+import { SELF_TAG, tagForProperty } from './tags';
 
 /**
   @decorator
@@ -135,9 +97,7 @@ export function tracked(...args: any[]): Decorator | DecoratorPropertyDescriptor
       );
 
       assert(
-        `The initializer passed to tracked must be a function. Received ${
-          propertyDesc.initializer
-        }`,
+        `The initializer passed to tracked must be a function. Received ${propertyDesc.initializer}`,
         !('initializer' in propertyDesc) || typeof propertyDesc.initializer === 'function'
       );
     }
@@ -169,11 +129,6 @@ export function tracked(...args: any[]): Decorator | DecoratorPropertyDescriptor
     return decorator;
   }
 
-  assert(
-    'Native decorators are not enabled without the EMBER_NATIVE_DECORATOR_SUPPORT flag',
-    Boolean(EMBER_NATIVE_DECORATOR_SUPPORT)
-  );
-
   return descriptorForField(args);
 }
 
@@ -193,118 +148,27 @@ function descriptorForField([_target, key, desc]: [
     !desc || (!desc.value && !desc.get && !desc.set)
   );
 
-  let initializer = desc ? desc.initializer : undefined;
-  let secretKey = symbol(key);
+  let { getter, setter } = trackedData<any, any>(key, desc ? desc.initializer : undefined);
 
   return {
     enumerable: true,
     configurable: true,
 
     get(): any {
-      let propertyTag = tagForProperty(this, key);
-
-      if (CURRENT_TRACKER) CURRENT_TRACKER.add(propertyTag);
-
-      // If the field has never been initialized, we should initialize it
-      if (!(secretKey in this)) {
-        this[secretKey] = typeof initializer === 'function' ? initializer.call(this) : undefined;
-      }
-
-      let value = this[secretKey];
+      let value = getter(this);
 
       // Add the tag of the returned value if it is an array, since arrays
       // should always cause updates if they are consumed and then changed
       if (Array.isArray(value) || isEmberArray(value)) {
-        update(propertyTag, tagForProperty(value, '[]'));
+        consumeTag(tagForProperty(value, '[]'));
       }
 
-      return this[secretKey];
+      return value;
     },
 
     set(newValue: any): void {
-      markObjectAsDirty(this, key);
-
-      this[secretKey] = newValue;
-
-      if (propertyDidChange !== null) {
-        propertyDidChange();
-      }
+      setter(this, newValue);
+      dirtyTagFor(this, SELF_TAG);
     },
   };
-}
-
-/**
-  @private
-
-  Whenever a tracked computed property is entered, the current tracker is
-  saved off and a new tracker is replaced.
-
-  Any tracked properties consumed are added to the current tracker.
-
-  When a tracked computed property is exited, the tracker's tags are
-  combined and added to the parent tracker.
-
-  The consequence is that each tracked computed property has a tag
-  that corresponds to the tracked properties consumed inside of
-  itself, including child tracked computed properties.
-*/
-let CURRENT_TRACKER: Option<Tracker> = null;
-
-export function track(callback: () => void) {
-  let parent = CURRENT_TRACKER;
-  let current = new Tracker();
-
-  CURRENT_TRACKER = current;
-
-  try {
-    callback();
-  } finally {
-    CURRENT_TRACKER = parent;
-  }
-
-  return current.combine();
-}
-
-export function consume(tag: Tag) {
-  if (CURRENT_TRACKER !== null) {
-    CURRENT_TRACKER.add(tag);
-  }
-}
-
-export function isTracking() {
-  return CURRENT_TRACKER !== null;
-}
-
-export type Key = string;
-
-export interface Interceptors {
-  [key: string]: boolean;
-}
-
-let propertyDidChange: (() => void) | null = null;
-
-export function setPropertyDidChange(cb: () => void): void {
-  propertyDidChange = cb;
-}
-
-export class UntrackedPropertyError extends Error {
-  static for(obj: any, key: string): UntrackedPropertyError {
-    return new UntrackedPropertyError(
-      obj,
-      key,
-      `The property '${key}' on ${obj} was changed after being rendered. If you want to change a property used in a template after the component has rendered, mark the property as a tracked property with the @tracked decorator.`
-    );
-  }
-
-  constructor(public target: any, public key: string, message: string) {
-    super(message);
-  }
-}
-
-/**
- * Function that can be used in development mode to generate more meaningful
- * error messages.
- */
-export interface UntrackedPropertyErrorThrower {
-  (obj: any, key: string): void;
 }
